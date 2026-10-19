@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>五子棋 · 15×15</title>
+<meta name="description" content="单文件网页五子棋，本地 AI 引擎，支持禁手、让子、摆棋模式">
+<style>
+  html,body{height:100%;margin:0}
+  body{
+    background:radial-gradient(1200px 800px at 50% -10%,#241c14 0%,#100d0a 55%,#0a0807 100%);
+    color:#f0e6d6; font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .card{
+    max-width:460px; width:100%; text-align:center;
+    background:linear-gradient(180deg,#1d1712,#14100c);
+    border:1px solid #3a2c1d; border-radius:18px; padding:34px 26px;
+    box-shadow:0 24px 60px rgba(0,0,0,.5);
+  }
+  h1{font-size:22px; margin:0 0 8px; letter-spacing:.5px}
+  p{font-size:13px; color:#a08d74; line-height:1.75; margin:0 0 22px}
+  a.play{
+    display:block; padding:14px; border-radius:12px; text-decoration:none;
+    background:linear-gradient(180deg,#5a2a24,#3d1c18); border:1px solid #7a3a31;
+    color:#fff; font-size:15px; font-weight:600; letter-spacing:.5px;
+    transition:background .15s, transform .08s;
+  }
+  a.play:hover{background:linear-gradient(180deg,#6e332b,#48211c)}
+  a.play:active{transform:translateY(1px)}
+  .links{margin-top:18px; font-size:12px}
+  .links a{color:#a08d74; text-decoration:none; margin:0 8px}
+  .links a:hover{color:#e6d9c4}
+  .feat{margin-top:24px; padding-top:18px; border-top:1px solid #3a2c1d;
+        font-size:11.5px; color:#8d7a63; line-height:1.9; text-align:left}
+  .feat b{color:#c9b99f; font-weight:600}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>五子棋 · 15×15</h1>
+  <p>纯本地 AI，不联网<br>支持禁手规则 · 让子 · 摆棋复盘 · 双人对战</p>
+  <a class="play" href="play.html">开始游戏</a>
+  <div class="links">
+    <a href="https://github.com/zxbk12138/gomoku">源码</a>
+    <a href="https://github.com/zxbk12138/gomoku/blob/main/README.md">说明</a>
+  </div>
+  <div class="feat">
+    <b>人机对战</b>：AI 执黑/执白，三档强度<br>
+    <b>禁手规则</b>：黑棋禁止三三、四四、长连<br>
+    <b>摆棋模式</b>：手动摆局面，让 AI 接着下<br>
+    <b>双人对战</b>：关掉 AI，两人轮流下
+  </div>
+</div>
+</body>
+</html>
