@@ -377,10 +377,25 @@ class Engine {
   }
 
   // ------------------------------------------------ VCF: victory by continuous fours
-  /** returns the winning move sequence [attack, forcedBlock, attack, ...] or null */
+  /**
+   * Returns a winning move sequence [attack, forcedBlock, attack, ...] or null.
+   * The board is always restored before returning (checked with an assertion in
+   * debug mode) - a previous version leaked stones and produced fake wins.
+   */
   vcf(side, depth) {
     if (depth <= 0) return null;
     if (Date.now() > this.deadline) return null;
+
+    const before = this.count;
+    try {
+      return this._vcf(side, depth);
+    } finally {
+      // hard guarantee: never leave the board modified
+      while (this.count > before) this.undo(this.stack[this.stack.length - 1]);
+    }
+  }
+
+  _vcf(side, depth) {
     const opp = 3 - side;
     const cands = this.candidates();
     if (cands.length === 0) return null;
@@ -407,24 +422,30 @@ class Engine {
     for (let i = 0; i < fours.length; i++) {
       const c = fours[i].c;
       const threats = fours[i].threats;
-      // double four (or four + open three): the opponent cannot cover everything
-      if (threats.length >= 2) return [c];
 
-      const block = threats[0];
       this.place(c, side);
       try {
+        // recompute threats on the real board (the cached list may be stale)
+        const live = [];
+        const cc0 = this.candidates();
+        for (let k = 0; k < cc0.length; k++) if (winArr[cc0[k]] > 0) live.push(cc0[k]);
+
+        // double four: the opponent cannot cover both
+        if (live.length >= 2) return [c];
+        if (live.length === 0) continue;
+
+        const block = live[0];
         // opponent could ignore the four and win immediately elsewhere
         let oppWins = false;
-        const cc = this.candidates();
-        for (let k = 0; k < cc.length; k++) {
-          if (cc[k] !== block && oppWinArr[cc[k]] > 0) { oppWins = true; break; }
+        for (let k = 0; k < cc0.length; k++) {
+          if (cc0[k] !== block && oppWinArr[cc0[k]] > 0) { oppWins = true; break; }
         }
-        if (!oppWins) {
-          this.place(block, opp);
-          let sub = null;
-          try { sub = this.vcf(side, depth - 1); } finally { this.undo(block); }
-          if (sub) return [c, block, ...sub];
-        }
+        if (oppWins) continue;
+
+        this.place(block, opp);
+        let sub = null;
+        try { sub = this._vcf(side, depth - 1); } finally { this.undo(block); }
+        if (sub) return [c, block, ...sub];
       } finally {
         this.undo(c);
       }
