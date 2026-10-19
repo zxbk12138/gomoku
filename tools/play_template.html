@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>五子棋 · 15×15</title>
+<style>
+  :root{
+    --ink:#2a1d10; --panel:#14100c; --panel2:#1d1712; --line:#3a2c1d;
+    --txt:#f0e6d6; --dim:#a08d74; --accent:#e0483c; --ok:#4fb477;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; font-family:"Microsoft YaHei","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
+    background:radial-gradient(1200px 800px at 50% -10%,#241c14 0%,#100d0a 55%,#0a0807 100%);
+    color:var(--txt); padding:22px;
+    /* NOT flex-centred: centring a too-tall child pushes its top off-screen
+       and it becomes unscrollable.  Use auto margins on the wrapper instead. */
+    display:block;
+    min-height:100%;
+    overflow-y:auto;
+  }
+  .wrap{
+    display:flex; gap:24px; align-items:flex-start; justify-content:center; flex-wrap:wrap;
+    max-width:1180px; width:100%; margin:0 auto;
+  }
+  .boardbox{
+    background:linear-gradient(160deg,#3a2a19,#241a10); padding:13px; border-radius:18px;
+    box-shadow:0 24px 60px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,220,170,.10);
+    position:relative;
+    /* keep the board stable while the side panel grows/shrinks */
+    align-self:flex-start;
+    flex:0 0 auto;
+  }
+  svg{
+    display:block; height:auto; border-radius:8px; touch-action:manipulation;
+    /* size by BOTH viewport height and width so the board never overflows */
+    width:min(72vh, 640px, 58vw);
+  }
+  svg.thinking{cursor:progress}
+  svg.human{cursor:pointer}
+
+  aside{
+    width:306px; min-width:270px; flex:1 1 270px; background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid var(--line); border-radius:18px; padding:18px 16px; display:flex; flex-direction:column;
+    box-shadow:0 24px 60px rgba(0,0,0,.45);
+    /* pin the panel: it scrolls internally instead of growing the page */
+    align-self:flex-start;
+    max-height:calc(100vh - 44px);
+    overflow-y:auto;
+    scrollbar-width:thin;
+  }
+  aside::-webkit-scrollbar{width:7px}
+  aside::-webkit-scrollbar-thumb{background:#3a2c1d;border-radius:4px}
+  h1{font-size:16px; margin:0 0 3px; letter-spacing:.4px}
+  .sub{font-size:11.5px; color:var(--dim); margin-bottom:13px}
+  .status{
+    display:flex; align-items:center; gap:9px; font-size:13.5px; padding:10px 12px; border-radius:11px;
+    background:rgba(224,72,60,.10); border:1px solid rgba(224,72,60,.28); margin-bottom:12px; min-height:42px;
+    transition:background .2s,border-color .2s;
+  }
+  .status.think{background:rgba(255,190,90,.10); border-color:rgba(255,190,90,.32)}
+  .status.over{background:rgba(79,180,119,.12); border-color:rgba(79,180,119,.35)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent);flex:none}
+  .status.think .dot{background:#ffbe5a;box-shadow:0 0 12px #ffbe5a;animation:pulse .9s infinite}
+  .status.over .dot{background:var(--ok);box-shadow:0 0 12px var(--ok)}
+  @keyframes pulse{50%{opacity:.35}}
+
+  .row{display:flex; gap:8px; margin-bottom:10px}
+  button{
+    flex:1; font:inherit; font-size:13px; padding:9px 10px; border-radius:10px; cursor:pointer;
+    background:linear-gradient(180deg,#2e2418,#241c13); color:#e8dcc8; border:1px solid #46341f;
+    transition:transform .08s, background .15s, border-color .15s;
+  }
+  button:hover:not(:disabled){background:linear-gradient(180deg,#3a2d1d,#2a2016); border-color:#5c452a}
+  button:active:not(:disabled){transform:translateY(1px)}
+  button:disabled{opacity:.38; cursor:not-allowed}
+  button.primary{background:linear-gradient(180deg,#5a2a24,#3d1c18); border-color:#7a3a31}
+  button.primary:hover:not(:disabled){background:linear-gradient(180deg,#6e332b,#48211c)}
+  .lvl{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim); margin-bottom:12px}
+  select{
+    flex:1; font:inherit; font-size:12.5px; padding:7px 9px; border-radius:9px; color:#e8dcc8;
+    background:#241c13; border:1px solid #46341f; outline:none;
+  }
+  .moves{flex:1; overflow:auto; max-height:40vh; min-height:120px; padding-right:4px; margin-bottom:10px}  .moves::-webkit-scrollbar{width:6px}
+  .moves::-webkit-scrollbar-thumb{background:#3a2c1d;border-radius:3px}
+  .mv{display:flex; align-items:center; gap:9px; padding:5px 8px; border-radius:8px; font-size:12.5px; color:#d8cbb8}
+  .mv:nth-child(odd){background:rgba(255,255,255,.025)}
+  .mv.last{background:rgba(224,72,60,.16); color:#fff; box-shadow:inset 0 0 0 1px rgba(224,72,60,.35)}
+  .mv .n{width:26px; text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; font-size:11.5px}
+  .mv.last .n{color:#f0a49c}
+  .st{width:15px;height:15px;border-radius:50%;flex:none}
+  .st.b{background:radial-gradient(circle at 32% 30%,#6e6e78,#0a0a0e 72%);box-shadow:0 1px 3px rgba(0,0,0,.7)}
+  .st.w{background:radial-gradient(circle at 32% 30%,#ffffff,#b9b9c4 74%);box-shadow:0 1px 3px rgba(0,0,0,.5)}
+  .mv .c{font-weight:600; letter-spacing:.4px}
+  .mv .tag{margin-left:auto; font-size:10.5px; color:#8d7a63}
+  .legend{padding-top:11px; border-top:1px solid var(--line); font-size:11.5px; color:var(--dim); line-height:1.7}
+  .legend b{color:#e6d9c4; font-weight:600}
+  .toggle{display:flex; align-items:center; gap:8px; margin:8px 0 0; font-size:11.5px; color:var(--dim); cursor:pointer; user-select:none}
+  .toggle input{accent-color:var(--accent)}
+  .toggle b{color:#e6d9c4; font-weight:600}
+  .rules{
+    border:1px solid var(--line); border-radius:11px; padding:6px 10px 10px; margin-bottom:12px;
+    background:rgba(255,255,255,.015);
+  }
+  .rules .toggle{margin-top:7px; line-height:1.45; align-items:flex-start}
+  .rules .toggle input{margin-top:2px; flex:none}
+  .indent{margin-left:2px; opacity:.85}
+  .rules.collapsed{display:none}
+
+  /* ---------------- setup / analysis mode ---------------- */
+  .setup{
+    border:1px solid var(--line); border-radius:11px; padding:9px 10px; margin-bottom:12px;
+    background:rgba(255,255,255,.015);
+  }
+  .setup-head{display:flex; align-items:center; gap:8px}
+  .setup-toggle{
+    flex:none; width:auto; padding:7px 12px; font-size:12.5px;
+    background:linear-gradient(180deg,#2e2418,#241c13); border:1px solid #46341f;
+  }
+  .setup-toggle.on{
+    background:linear-gradient(180deg,#3f5a3a,#2a3d27); border-color:#4f7a48; color:#d8f0d0;
+  }
+  .setup-hint{font-size:11px; color:var(--dim); flex:1; text-align:right}
+  .setup-body{display:none; margin-top:10px}
+  .setup-body.open{display:block}
+  .paint{font-size:12px; padding:8px 6px}
+  .paint.active{background:linear-gradient(180deg,#5a2a24,#3d1c18); border-color:#7a3a31; color:#fff}
+  .setup-note{font-size:10.5px; color:var(--dim); line-height:1.6; margin-top:8px}
+  svg.painting{cursor:crosshair}
+  svg.erasing{cursor:not-allowed}
+  .toast{
+    position:absolute; left:50%; top:14px; transform:translate(-50%,-14px); opacity:0; pointer-events:none;
+    background:rgba(20,14,10,.92); border:1px solid #5c452a; color:#f0e6d6; font-size:12.5px;
+    padding:8px 14px; border-radius:10px; transition:opacity .18s, transform .18s; white-space:nowrap;
+  }
+  .toast.show{opacity:1; transform:translate(-50%,0)}
+  @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+  .shake{animation:shake .22s}
+
+  /* ---------------- mobile / tablet ---------------- */
+  @media (max-width: 820px), (pointer: coarse){
+    body{padding:10px}
+    .wrap{gap:12px; flex-direction:column; align-items:center}
+    .boardbox{padding:8px; border-radius:14px; width:100%; max-width:min(96vw,560px)}
+    svg{width:100%; max-width:100%}
+    aside{
+      width:100%; max-width:min(96vw,560px); padding:14px 13px;
+      border-radius:14px; min-width:0;
+      max-height:none;          /* let the page scroll on phones */
+      overflow-y:visible;
+    }
+    .moves{max-height:26vh; min-height:76px}
+    .lvl{font-size:11.5px}
+    select{font-size:12px; padding:8px}
+    button{font-size:13px; padding:11px 10px}   /* bigger tap target */
+    h1{font-size:15px}
+    .legend{font-size:11px}
+    .toast{font-size:12px; white-space:normal; max-width:88vw; text-align:center}
+  }
+  @media (max-width: 820px) and (orientation: landscape){
+    .wrap{flex-direction:row; align-items:flex-start}
+    .boardbox{max-width:min(62vw,520px)}
+    svg{width:min(62vw, 78vh)}
+    aside{max-width:36vw; width:36vw; max-height:calc(100vh - 20px); overflow-y:auto}
+    .moves{max-height:40vh}
+  }
+  /* short desktop windows: shrink the board so the whole thing fits */
+  @media (min-width: 821px) and (max-height: 760px){
+    svg{width:min(84vh, 560px, 52vw)}
+    aside{max-height:calc(100vh - 30px)}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="boardbox">
+    <svg id="board" viewBox="0 0 768 768" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <aside>
+    <h1>五子棋 · 15×15</h1>
+    <div class="sub" id="whoSub">● 黑 = AI&nbsp;&nbsp;&nbsp;○ 白 = 你&nbsp;&nbsp;&nbsp;点击棋盘落子</div>
+
+    <div class="status" id="statusBox"><span class="dot"></span><span id="statusText">准备中…</span></div>
+
+    <div class="lvl">
+      <span>AI 强度</span>
+      <select id="level">
+        <option value="500">快速（0.5 秒）</option>
+        <option value="1500" selected>标准（1.5 秒）</option>
+        <option value="3500">强力（3.5 秒）</option>
+      </select>
+    </div>
+
+    <div class="lvl">
+      <span>我执</span>
+      <select id="side">
+        <option value="W" selected>白棋（后手）</option>
+        <option value="B">黑棋（先手）</option>
+      </select>
+    </div>
+
+    <div class="lvl">
+      <span>先手颜色</span>
+      <select id="firstColor">
+        <option value="B" selected>黑棋先走</option>
+        <option value="W">白棋先走（交换）</option>
+      </select>
+    </div>
+
+    <div class="rules">
+      <label class="toggle"><input type="checkbox" id="optTwoPlayer"> <b>双人对战</b>（关掉 AI，两个人轮流下）</label>
+      <label class="toggle"><input type="checkbox" id="optRenju"> <b>禁手规则</b>（黑棋三三 / 四四 / 长连判负）</label>
+      <label class="toggle"><input type="checkbox" id="optHandicap"> <b>让子模式</b>（白棋开局连下两子）</label>
+      <label class="toggle"><input type="checkbox" id="optHandicapAi"> <span class="indent">让子给 AI（你执黑时）</span></label>
+      <label class="toggle"><input type="checkbox" id="optNerf"> <b>AI 先手时自动降档</b>（降低搜索深度、关闭算杀）</label>
+    </div>
+
+    <div class="row">
+      <button id="undo" title="撤销上一回合（快捷键 Ctrl+Z）">↶ 悔棋</button>
+      <button id="restart" class="primary" title="清空重来（快捷键 R）">重新开始</button>
+    </div>
+
+    <div class="row">
+      <button id="copyRecord" title="复制完整棋谱到剪贴板">📋 复制棋谱</button>
+      <button id="togglePanel" title="收起/展开设置">⚙ 设置</button>
+    </div>
+
+    <div class="setup" id="setupBox">
+      <div class="setup-head">
+        <button id="setupBtn" class="setup-toggle">✎ 摆棋模式</button>
+        <span id="setupHint" class="setup-hint"></span>
+      </div>
+      <div class="setup-body" id="setupBody">
+        <div class="row" style="margin-bottom:8px">
+          <button id="paintBlack" class="paint active">● 画黑棋</button>
+          <button id="paintWhite" class="paint">○ 画白棋</button>
+        </div>
+        <div class="row" style="margin-bottom:8px">
+          <button id="setupErase">✕ 擦除</button>
+          <button id="setupClear">清空棋盘</button>
+        </div>
+        <div class="row" style="margin-bottom:8px">
+          <button id="setupDone" class="primary">✓ 完成摆棋</button>
+        </div>
+        <div class="lvl" style="margin-bottom:0">
+          <span>接着由</span>
+          <select id="setupNext">
+            <option value="human" selected>我来下</option>
+            <option value="ai">AI 来下</option>
+          </select>
+        </div>
+        <div class="setup-note">
+          点棋盘放子 · 右键或点「擦除」删子<br>
+          摆好后选「AI 来下」让它接着走
+        </div>
+      </div>
+    </div>
+
+    <div class="moves" id="moves"></div>
+
+    <label class="toggle"><input type="checkbox" id="showNum" checked> 显示手数</label>
+    <label class="toggle"><input type="checkbox" id="showGhost" checked> 悬停预览落点</label>
+
+    <div class="legend">
+      红圈 = 最新一手&nbsp;&nbsp;·&nbsp;&nbsp;绿圈 = 五连获胜<br>
+      列 <b>A–O</b>，行 <b>1–15</b>，<b>第 1 行在最下方</b><br>
+      点错了就按 <b>悔棋</b>，会退回你上一步之前
+    </div>
+  </aside>
+</div>
+
+<script>
+/*__ENGINE__*/
+</script>
+
+<script>
+(function(){
+  const { Engine, coordName, parseCoord } = window.GomokuEngine;
+  const { analyseBlackMove } = window.Renju;
+  const N = 15, CELL = 46, MARGIN = 62;
+  const NS = "http://www.w3.org/2000/svg";
+  const PX = i => MARGIN + i * CELL;              // x from column
+  const PY = row => MARGIN + (N - 1 - row) * CELL; // y from board row (0 = rank 1 = bottom)
+  const R = CELL * 0.435;
+
+  const svg = document.getElementById('board');
+  const toastEl = document.getElementById('toast');
+  const statusBox = document.getElementById('statusBox');
+  const statusText = document.getElementById('statusText');
+  const movesBox = document.getElementById('moves');
+  const undoBtn = document.getElementById('undo');
+  const restartBtn = document.getElementById('restart');
+  const levelSel = document.getElementById('level');
+  const sideSel = document.getElementById('side');
+  const firstColorSel = document.getElementById('firstColor');
+  const whoSub = document.getElementById('whoSub');
+  const showNum = document.getElementById('showNum');
+  const showGhost = document.getElementById('showGhost');
+  const optRenju = document.getElementById('optRenju');
+  const optHandicap = document.getElementById('optHandicap');
+  const optHandicapAi = document.getElementById('optHandicapAi');
+  const optNerf = document.getElementById('optNerf');
+  const optTwoPlayer = document.getElementById('optTwoPlayer');
+  const copyRecordBtn = document.getElementById('copyRecord');
+  const togglePanelBtn = document.getElementById('togglePanel');
+  const rulesBox = document.querySelector('.rules');
+  const setupBox = document.getElementById('setupBox');
+  const setupBtn = document.getElementById('setupBtn');
+  const setupBody = document.getElementById('setupBody');
+  const setupHint = document.getElementById('setupHint');
+  const paintBlack = document.getElementById('paintBlack');
+  const paintWhite = document.getElementById('paintWhite');
+  const setupErase = document.getElementById('setupErase');
+  const setupClear = document.getElementById('setupClear');
+  const setupDone = document.getElementById('setupDone');
+  const setupNext = document.getElementById('setupNext');
+
+  // ---------------------------------------------------------------- state
+  let moves = [];          // {n, color:'B'|'W', cell:'H8'}
+  let board = new Int8Array(225);
+  let status = 'playing';  // playing | black_win | white_win | draw | black_forbidden
+  let thinking = false;
+  let winCells = null;
+  let gen = 0;             // invalidates pending AI work after undo/restart
+  let humanSide = 'W';     // colour the human plays: 'B' or 'W'
+  let firstSide = 'B';     // colour that moves first: 'B' or 'W'
+  let twoPlayer = false;   // no AI at all
+  let renju = false;       // black forbidden moves enabled
+  let handicap = false;    // the non-first colour may place two stones at the start
+  let handicapAi = false;  // give the handicap to the AI instead of the human
+  let nerf = false;        // weaken the AI when it moves first
+  let handicapLeft = 0;    // extra stones the handicap side may still place
+
+  // setup / analysis mode ("摆棋")
+  let setupMode = false;
+  let setupTurn = 'B';     // colour being painted while setting up
+  let setupMoves = [];     // ordered moves recorded during setup
+  let eraseMode = false;   // erase instead of paint
+
+  const other = (s) => (s === 'B' ? 'W' : 'B');
+  const aiSide = () => other(humanSide);
+  const turn = () => (moves.length % 2 === 0 ? firstSide : other(firstSide));
+  const idx = (col, row) => row * N + col;
+  const colorName = (s) => (s === 'B' ? '黑' : '白');
+  const handicapSide = () => (handicapAi ? aiSide() : humanSide);
+
+  /** whose stone is it right now, taking the handicap into account */
+  function actingSide(){
+    if (handicapLeft > 0 && moves.length > 0) {
+      // the handicap side keeps the turn until its extra stones are used
+      return handicapSide();
+    }
+    return turn();
+  }
+
+  /** in setup mode the user paints either colour; otherwise normal turn order */
+  function sideToPlace(){
+    return setupMode ? setupTurn : actingSide();
+  }
+
+  // ---------------------------------------------------------------- static board
+  let stonesLayer, numLayer, hoverLayer, ghost, ghostRing, winLayer;
+
+  function el(tag, attrs, parent){
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+
+  function buildBoard(){
+    const S = MARGIN * 2 + CELL * (N - 1);
+    const defs = el('defs', {}, svg);
+
+    const wood = el('linearGradient', {id:'wood', x1:'0', y1:'0', x2:'1', y2:'1'}, defs);
+    el('stop', {offset:'0%',   'stop-color':'#efcf9b'}, wood);
+    el('stop', {offset:'45%',  'stop-color':'#e2b675'}, wood);
+    el('stop', {offset:'100%', 'stop-color':'#c9904e'}, wood);
+
+    const gb = el('radialGradient', {id:'gb', cx:'0.34', cy:'0.30', r:'0.80'}, defs);
+    el('stop', {offset:'0%',   'stop-color':'#6e6e78'}, gb);
+    el('stop', {offset:'55%',  'stop-color':'#25252c'}, gb);
+    el('stop', {offset:'100%', 'stop-color':'#08080c'}, gb);
+
+    const gw = el('radialGradient', {id:'gw', cx:'0.34', cy:'0.30', r:'0.82'}, defs);
+    el('stop', {offset:'0%',   'stop-color':'#ffffff'}, gw);
+    el('stop', {offset:'70%',  'stop-color':'#ececf1'}, gw);
+    el('stop', {offset:'100%', 'stop-color':'#b6b6c2'}, gw);
+
+    const gwg = el('radialGradient', {id:'gwg', cx:'0.34', cy:'0.30', r:'0.82'}, defs);
+    el('stop', {offset:'0%',   'stop-color':'#ffffff', 'stop-opacity':'0.85'}, gwg);
+    el('stop', {offset:'100%', 'stop-color':'#ffffff', 'stop-opacity':'0.45'}, gwg);
+
+    const sh = el('filter', {id:'sh', x:'-40%', y:'-40%', width:'180%', height:'180%'}, defs);
+    el('feDropShadow', {dx:'0', dy:'2.2', stdDeviation:'2.4', 'flood-color':'#000', 'flood-opacity':'0.45'}, sh);
+
+    const glow = el('filter', {id:'glow', x:'-60%', y:'-60%', width:'220%', height:'220%'}, defs);
+    el('feGaussianBlur', {stdDeviation:'5', result:'b'}, glow);
+    const m = el('feMerge', {}, glow);
+    el('feMergeNode', {in:'b'}, m);
+    el('feMergeNode', {in:'SourceGraphic'}, m);
+
+    el('rect', {x:0, y:0, width:S, height:S, rx:10, fill:'url(#wood)'}, svg);
+    el('rect', {x:18, y:18, width:S-36, height:S-36, rx:6, fill:'none',
+                stroke:'rgba(90,58,26,.35)', 'stroke-width':2}, svg);
+
+    const g = el('g', {stroke:'#4a3117', 'stroke-opacity':'0.82', 'stroke-width':'1.15'}, svg);
+    for (let i = 0; i < N; i++){
+      el('line', {x1:PX(0), y1:PY(i), x2:PX(N-1), y2:PY(i)}, g);
+      el('line', {x1:PX(i), y1:PY(0), x2:PX(i), y2:PY(N-1)}, g);
+    }
+    el('rect', {x:PX(0), y:PY(N-1), width:PX(N-1)-PX(0), height:PY(0)-PY(N-1),
+                fill:'none', stroke:'#3a2410', 'stroke-width':'2.4'}, svg);
+
+    [[3,3],[3,11],[11,3],[11,11],[7,7]].forEach(([cx, cy]) => {
+      el('circle', {cx:PX(cx), cy:PY(cy), r:3.6, fill:'#3a2410'}, svg);
+    });
+
+    const fs = 15;
+    for (let i = 0; i < N; i++){
+      const letter = String.fromCharCode(65 + i);
+      [[PX(i), 40], [PX(i), S - 26]].forEach(([x, y]) => {
+        const t = el('text', {x:x, y:y, 'text-anchor':'middle', 'font-size':fs,
+                              fill:'#4a3117', 'font-family':'Georgia,serif', opacity:'0.85'}, svg);
+        t.textContent = letter;
+      });
+      // rank i+1 sits at PY(i): i=0 -> rank 1 -> bottom
+      [[30, PY(i) + 5], [S - 30, PY(i) + 5]].forEach(([x, y]) => {
+        const t = el('text', {x:x, y:y, 'text-anchor':'middle', 'font-size':fs,
+                              fill:'#4a3117', 'font-family':'Georgia,serif', opacity:'0.85'}, svg);
+        t.textContent = String(i + 1);
+      });
+    }
+
+    winLayer = el('g', {}, svg);
+    stonesLayer = el('g', {}, svg);
+    numLayer = el('g', {}, svg);
+    hoverLayer = el('g', {opacity:'0', 'pointer-events':'none'}, svg);
+    ghost = el('circle', {r:R, fill:'url(#gwg)', stroke:'rgba(255,255,255,.55)', 'stroke-width':'1.2'}, hoverLayer);
+    ghostRing = el('circle', {r:R*1.16, fill:'none', stroke:'#e0483c', 'stroke-width':'1.8',
+                              'stroke-dasharray':'4 3', opacity:'0.9'}, hoverLayer);
+  }
+
+  // ---------------------------------------------------------------- rendering
+  function stone(cx, cy, color){
+    return el('circle', {cx:cx, cy:cy, r:R,
+                         fill: color === 'B' ? 'url(#gb)' : 'url(#gw)',
+                         filter:'url(#sh)'}, stonesLayer);
+  }
+
+  function render(){
+    stonesLayer.innerHTML = '';
+    numLayer.innerHTML = '';
+    winLayer.innerHTML = '';
+
+    // during setup the board array is the source of truth (stones may have no order)
+    const view = setupMode
+      ? setupMoves
+      : moves;
+
+    view.forEach(m => {
+      const col = m.cell.charCodeAt(0) - 65;
+      const row = parseInt(m.cell.slice(1), 10) - 1;
+      stone(PX(col), PY(row), m.color);
+    });
+
+    if (showNum.checked){
+      view.forEach(m => {
+        const col = m.cell.charCodeAt(0) - 65;
+        const row = parseInt(m.cell.slice(1), 10) - 1;
+        const t = el('text', {x:PX(col), y:PY(row) + 4.2, 'text-anchor':'middle',
+                              'font-size':'12.5', 'font-family':'Arial,sans-serif',
+                              'font-weight':'600', opacity:'0.9',
+                              fill: m.color === 'B' ? '#f2f2f6' : '#2a2a30'}, numLayer);
+        t.textContent = String(m.n);
+      });
+    }
+
+    if (!setupMode && moves.length && status === 'playing'){
+      const last = moves[moves.length - 1];
+      const col = last.cell.charCodeAt(0) - 65;
+      const row = parseInt(last.cell.slice(1), 10) - 1;
+      el('circle', {cx:PX(col), cy:PY(row), r:R*1.17, fill:'none',
+                    stroke:'#e0483c', 'stroke-width':'2.6'}, winLayer);
+    }
+
+    if (winCells){
+      winCells.forEach(c => {
+        el('circle', {cx:PX(c % N), cy:PY(Math.floor(c / N)), r:R*1.28, fill:'none',
+                      stroke:'#4fb477', 'stroke-width':'3', filter:'url(#glow)'}, winLayer);
+      });
+    }
+  }
+
+  function renderPanel(){
+    if (setupMode){
+      whoSub.innerHTML = `摆棋模式 · 点击放子，右键删除&nbsp;&nbsp;当前画 ${colorName(setupTurn)}棋`;
+    } else {
+      whoSub.innerHTML = twoPlayer
+        ? `双人对战 · 两人轮流点击落子&nbsp;&nbsp;先手：${colorName(firstSide)}`
+        : `● 黑 = ${humanSide === 'B' ? '你' : 'AI'}&nbsp;&nbsp;&nbsp;` +
+          `○ 白 = ${humanSide === 'W' ? '你' : 'AI'}&nbsp;&nbsp;&nbsp;` +
+          `先手：${colorName(firstSide)}`;
+    }
+
+    statusBox.className = 'status';
+    if (setupMode){
+      statusBox.classList.add('think');
+      statusText.textContent = `摆棋中：${colorName(setupTurn)}棋 · 已放 ${setupMoves.length} 子`;
+    } else if (status === 'playing'){
+      if (thinking){
+        statusBox.classList.add('think');
+        statusText.textContent = 'AI 思考中…';
+      } else if (twoPlayer){
+        const s = actingSide();
+        const extra = handicapLeft > 0 ? `（让子，还可下 ${handicapLeft} 手）` : '';
+        statusText.textContent = `轮到 ${colorName(s)}棋${extra}`;
+      } else {
+        const s = actingSide();
+        const extra = handicapLeft > 0 ? `（让子，还可下 ${handicapLeft} 手）` : '';
+        statusText.textContent = s === humanSide
+          ? `轮到你（${colorName(humanSide)}棋）落子${extra}`
+          : `轮到 AI（${colorName(s)}棋）${extra}`;
+      }
+    } else if (status === 'black_forbidden'){
+      statusBox.classList.add('over');
+      statusText.textContent = '黑棋走了禁手，判负';
+    } else {
+      statusBox.classList.add('over');
+      let msg;
+      if (status === 'draw') msg = '和棋';
+      else if (twoPlayer){
+        msg = `${colorName(status === 'black_win' ? 'B' : 'W')}棋五连，胜！`;
+      } else {
+        const winnerIsHuman = (status === 'black_win' && humanSide === 'B') ||
+                              (status === 'white_win' && humanSide === 'W');
+        msg = winnerIsHuman ? `你（${colorName(humanSide)}棋）五连，赢了！`
+                            : `AI（${colorName(aiSide())}棋）五连，你输了`;
+      }
+      statusText.textContent = msg;
+    }
+
+    movesBox.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    const list = setupMode ? setupMoves : moves;
+    list.forEach((m, i) => {
+      const d = document.createElement('div');
+      d.className = 'mv' + (i === list.length - 1 ? ' last' : '');
+      const tag = setupMode ? colorName(m.color)
+                : twoPlayer ? colorName(m.color)
+                : (m.color === humanSide ? '你' : 'AI');
+      d.innerHTML = `<span class="n">${m.n}</span><span class="st ${m.color.toLowerCase()}"></span>` +
+                    `<span class="c">${m.cell}</span><span class="tag">${tag}</span>`;
+      frag.appendChild(d);
+    });
+    movesBox.appendChild(frag);
+    movesBox.scrollTop = movesBox.scrollHeight;
+
+    const canUndo = moves.length > 0 && !thinking;
+    undoBtn.disabled = setupMode || !canUndo;
+    copyRecordBtn.disabled = setupMode || moves.length === 0;
+    svg.setAttribute('class', setupMode ? 'painting'
+                      : thinking ? 'thinking'
+                      : (status === 'playing' ? 'human' : ''));
+  }
+
+  function save(){
+    try {
+      localStorage.setItem('gomoku_v1', JSON.stringify({
+        moves, status, winCells, humanSide, firstSide,
+        twoPlayer, renju, handicap, handicapAi, nerf, handicapLeft,
+      }));
+    } catch (e) { /* file:// may block storage; ignore */ }
+  }
+
+  function load(){
+    try {
+      const raw = localStorage.getItem('gomoku_v1');
+      if (!raw) return false;
+      const st = JSON.parse(raw);
+      if (!st || !Array.isArray(st.moves)) return false;
+      moves = st.moves; status = st.status || 'playing'; winCells = st.winCells || null;
+      if (st.humanSide) humanSide = st.humanSide;
+      if (st.firstSide) firstSide = st.firstSide;
+      twoPlayer = !!st.twoPlayer; renju = !!st.renju;
+      handicap = !!st.handicap; handicapAi = !!st.handicapAi; nerf = !!st.nerf;
+      handicapLeft = st.handicapLeft || 0;
+      board = new Int8Array(225);
+      moves.forEach(m => { board[parseCoord(m.cell)] = m.color === 'B' ? 1 : 2; });
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // ---------------------------------------------------------------- game logic
+  function findWin(){
+    const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+    for (let row = 0; row < N; row++){
+      for (let col = 0; col < N; col++){
+        const c = board[idx(col, row)];
+        if (!c) continue;
+        for (const [dx, dy] of dirs){
+          const cells = [idx(col, row)];
+          let ok = true;
+          for (let s = 1; s < 5; s++){
+            const nx = col + dx*s, ny = row + dy*s;
+            if (nx < 0 || nx >= N || ny < 0 || ny >= N || board[idx(nx, ny)] !== c){ ok = false; break; }
+            cells.push(idx(nx, ny));
+          }
+          if (ok) return cells;
+        }
+      }
+    }
+    return null;
+  }
+
+  function commit(cell, color){
+    // renju: a black forbidden move is illegal - the stone is not placed at all
+    if (renju && color === 'B'){
+      const info = analyseBlackMove(board, cell % N, (cell / N) | 0);
+      if (info.forbidden){
+        toast('禁手：' + reasonName(info.reasons[0]) + '，黑棋不能下这里');
+        svg.classList.add('shake');
+        setTimeout(() => svg.classList.remove('shake'), 240);
+        return false;
+      }
+    }
+
+    board[cell] = color === 'B' ? 1 : 2;
+    moves.push({n: moves.length + 1, color, cell: coordName(cell)});
+    if (handicapLeft > 0) handicapLeft--;
+
+    const w = findWin();
+    if (w){ winCells = w; status = color === 'B' ? 'black_win' : 'white_win'; }
+    else if (moves.length >= 225) status = 'draw';
+    render(); renderPanel(); save();
+    return true;
+  }
+
+  const reasonName = (r) => (r === 'overline' ? '长连' : r === 'double-four' ? '四四' : '三三');
+
+  function aiThink(side){
+    const budget = parseInt(levelSel.value, 10) || 1500;
+    const e = new Engine();
+    e.clear();
+    for (const m of moves) e.place(parseCoord(m.cell), m.color === 'B' ? 1 : 2);
+    // engine takes numeric sides: 1 = black, 2 = white
+    const nerfed = nerf && turn() === firstSide;
+    const opts = {
+      maxDepth: nerfed ? 4 : 12,
+      vcfDepth: nerfed ? 0 : 14,
+      noVcf: nerfed,
+      variety: true,
+      varietyMargin: nerfed ? 160 : 40,
+      renju,
+    };
+    return e.think(side === 'B' ? 1 : 2, budget, opts);
+  }
+
+  function scheduleAI(){
+    if (twoPlayer) return;
+    const side = actingSide();
+    if (status !== 'playing' || side !== aiSide() || thinking) return;
+    thinking = true;
+    renderPanel();
+    const myGen = ++gen;
+    setTimeout(() => {
+      if (myGen !== gen){ return; }
+      let res;
+      try {
+        res = aiThink(side);
+      } catch (err){
+        console.error(err);
+        thinking = false; renderPanel();
+        toast('AI 计算出错：' + err.message);
+        return;
+      }
+      if (myGen !== gen) return;       // undone/restarted meanwhile
+      thinking = false;
+      if (res.move < 0){
+        toast('AI 没有合法落点');
+        status = 'black_forbidden';
+        renderPanel();
+        return;
+      }
+      commit(res.move, side);
+    }, 40);
+  }
+
+  // ---------------------------------------------------------------- interaction
+  let toastTimer = null;
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1500);
+  }
+
+  function svgPoint(ev){
+    const pt = svg.createSVGPoint();
+    // touch events carry the coordinates in touches/changedTouches
+    const src = (ev.changedTouches && ev.changedTouches[0]) ||
+                (ev.touches && ev.touches[0]) || ev;
+    pt.x = src.clientX; pt.y = src.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  }
+
+  // tolerance is generous on touch screens so fingers can hit the intersections
+  const isTouch = () => {
+    try { return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); }
+    catch (e) { return false; }
+  };
+  const HIT = () => (isTouch() ? 0.62 : 0.48);
+
+  function locate(ev){
+    const p = svgPoint(ev);
+    const col = Math.round((p.x - MARGIN) / CELL);
+    const screenRow = Math.round((p.y - MARGIN) / CELL);
+    if (col < 0 || col >= N || screenRow < 0 || screenRow >= N) return null;
+    // must be close to the intersection
+    if (Math.abs(p.x - PX(col)) > CELL * HIT()) return null;
+    if (Math.abs(p.y - PY(N - 1 - screenRow)) > CELL * HIT()) return null;
+    return {col, row: N - 1 - screenRow};
+  }
+
+  svg.addEventListener('mousemove', ev => {
+    if (setupMode){
+      const loc = locate(ev);
+      if (!loc){ hoverLayer.setAttribute('opacity', '0'); return; }
+      const cell = idx(loc.col, loc.row);
+      if (eraseMode && board[cell] === 0){ hoverLayer.setAttribute('opacity', '0'); return; }
+      if (!eraseMode && board[cell] !== 0){ hoverLayer.setAttribute('opacity', '0'); return; }
+      ghost.setAttribute('cx', PX(loc.col));
+      ghost.setAttribute('cy', PY(loc.row));
+      ghostRing.setAttribute('cx', PX(loc.col));
+      ghostRing.setAttribute('cy', PY(loc.row));
+      hoverLayer.setAttribute('opacity', '1');
+      return;
+    }
+    if (!showGhost.checked || thinking || status !== 'playing' || turn() !== humanSide){
+      hoverLayer.setAttribute('opacity', '0');
+      return;
+    }
+    const loc = locate(ev);
+    if (!loc || board[idx(loc.col, loc.row)] !== 0){
+      hoverLayer.setAttribute('opacity', '0');
+      return;
+    }
+    ghost.setAttribute('cx', PX(loc.col));   ghost.setAttribute('cy', PY(loc.row));
+    ghostRing.setAttribute('cx', PX(loc.col)); ghostRing.setAttribute('cy', PY(loc.row));
+    hoverLayer.setAttribute('opacity', '1');
+  });
+
+  svg.addEventListener('mouseleave', () => hoverLayer.setAttribute('opacity', '0'));
+
+  function handleTap(ev){
+    // ---- setup mode: paint / erase freely, no turn order, no AI ----
+    if (setupMode){
+      const loc = locate(ev);
+      if (!loc) return;
+      const cell = idx(loc.col, loc.row);
+      if (eraseMode || (ev.button === 2)){
+        if (board[cell] === 0){ toast('这里是空的'); return; }
+        board[cell] = 0;
+        setupMoves = setupMoves.filter((m) => parseCoord(m.cell) !== cell);
+      } else {
+        if (board[cell] !== 0){ toast('这里已经有子了'); return; }
+        board[cell] = setupTurn === 'B' ? 1 : 2;
+        setupMoves.push({n: setupMoves.length + 1, color: setupTurn, cell: coordName(cell)});
+        // alternate colours automatically, like placing stones by hand
+        setupTurn = other(setupTurn);
+      }
+      render(); renderPanel(); updateSetupUI();
+      return;
+    }
+
+    if (thinking) { toast('AI 正在思考…'); return; }
+    if (status !== 'playing') { toast('本局已结束，按「重新开始」再来一局'); return; }
+    const s = actingSide();
+    if (!twoPlayer && s !== humanSide) return;
+
+    const loc = locate(ev);
+    if (!loc) return;
+    const cell = idx(loc.col, loc.row);
+    if (board[cell] !== 0){
+      toast('这里已经有子了');
+      svg.classList.add('shake');
+      setTimeout(() => svg.classList.remove('shake'), 240);
+      return;
+    }
+
+    // renju: refuse to place a forbidden black move (player keeps the turn)
+    if (renju && s === 'B'){
+      const info = analyseBlackMove(board, loc.col, loc.row);
+      if (info.forbidden){
+        toast('禁手：' + reasonName(info.reasons[0]) + '，黑棋不能下这里');
+        svg.classList.add('shake');
+        setTimeout(() => svg.classList.remove('shake'), 240);
+        return;
+      }
+    }
+
+    hoverLayer.setAttribute('opacity', '0');
+    const placed = commit(cell, s);
+    if (placed !== false && status === 'playing') scheduleAI();
+  }
+
+  // mouse + pen
+  svg.addEventListener('click', handleTap);
+
+  // right-click erases while painting
+  svg.addEventListener('contextmenu', ev => {
+    if (!setupMode) return;
+    ev.preventDefault();
+    const loc = locate(ev);
+    if (!loc) return;
+    const cell = idx(loc.col, loc.row);
+    if (board[cell] === 0) return;
+    board[cell] = 0;
+    setupMoves = setupMoves.filter((m) => parseCoord(m.cell) !== cell);
+    render(); renderPanel(); updateSetupUI();
+  });
+
+  // touch: act on touchend and suppress the synthetic click that follows
+  let lastTouch = 0;
+  svg.addEventListener('touchend', ev => {
+    lastTouch = Date.now();
+    if (ev.cancelable) ev.preventDefault();   // stops the 300ms delayed click / double fire
+    handleTap(ev);
+  }, { passive: false });
+  svg.addEventListener('click', ev => {
+    if (Date.now() - lastTouch < 700) return; // ignore the emulated click after a tap
+  }, true);
+
+  // ---------------------------------------------------------------- buttons
+  function undo(){
+    if (thinking) return;
+    gen++;                     // cancel pending AI work
+    thinking = false;
+    let removed = 0;
+    if (twoPlayer){
+      if (moves.length){ popMove(); removed = 1; }
+    } else {
+      // drop trailing AI stones, then the human's last stone
+      while (moves.length && moves[moves.length - 1].color !== humanSide){ popMove(); removed++; }
+      if (moves.length && moves[moves.length - 1].color === humanSide){ popMove(); removed++; }
+    }
+    status = 'playing'; winCells = null;
+    // recompute handicap budget
+    if (handicap){
+      handicapLeft = moves.length === 0 ? 1 : 0;
+    } else {
+      handicapLeft = 0;
+    }
+    render(); renderPanel(); save();
+    if (removed === 0) toast('还没有可以悔的棋');
+    else toast('已悔棋');
+    if (!twoPlayer && actingSide() === aiSide()) scheduleAI();
+  }
+
+  function popMove(){
+    const m = moves.pop();
+    board[parseCoord(m.cell)] = 0;
+  }
+
+  function restart(){
+    gen++;
+    thinking = false;
+    moves = []; board = new Int8Array(225);
+    status = 'playing'; winCells = null;
+    handicapLeft = handicap ? 1 : 0;
+    render(); renderPanel(); save();
+    if (!twoPlayer && actingSide() === aiSide()) scheduleAI();
+  }
+
+  undoBtn.addEventListener('click', undo);
+  restartBtn.addEventListener('click', restart);
+  showNum.addEventListener('change', render);
+  levelSel.addEventListener('change', () => toast('AI 强度：' + levelSel.options[levelSel.selectedIndex].text));
+
+  // ---------------------------------------------------------------- setup mode
+  function updateSetupUI(){
+    setupBtn.classList.toggle('on', setupMode);
+    setupBtn.textContent = setupMode ? '✎ 摆棋中…' : '✎ 摆棋模式';
+    setupBody.classList.toggle('open', setupMode);
+    paintBlack.classList.toggle('active', setupTurn === 'B' && !eraseMode);
+    paintWhite.classList.toggle('active', setupTurn === 'W' && !eraseMode);
+    setupErase.classList.toggle('active', eraseMode);
+    setupErase.style.background = eraseMode ? 'linear-gradient(180deg,#5a2a24,#3d1c18)' : '';
+    setupErase.style.borderColor = eraseMode ? '#7a3a31' : '';
+    setupHint.textContent = setupMode
+      ? (eraseMode ? '擦除模式：点棋子删除' : `当前画${colorName(setupTurn)}棋 · 共 ${setupMoves.length} 子`)
+      : '';
+    svg.setAttribute('class', setupMode ? 'painting' : (thinking ? 'thinking' : (status === 'playing' ? 'human' : '')));
+    undoBtn.disabled = setupMode || thinking || moves.length === 0;
+    copyRecordBtn.disabled = setupMode || moves.length === 0;
+  }
+
+  function enterSetup(){
+    gen++;
+    thinking = false;
+    setupMode = true;
+    eraseMode = false;
+    // keep whatever is on the board so the user can adjust a live position
+    setupMoves = moves.slice();
+    setupTurn = moves.length ? other(moves[moves.length - 1].color) : firstSide;
+    status = 'playing'; winCells = null;
+    render(); renderPanel(); updateSetupUI();
+    toast('摆棋模式：点击棋盘放子');
+  }
+
+  function exitSetup(){
+    setupMode = false;
+    eraseMode = false;
+    // rebuild the move list from the painted position
+    moves = setupMoves.map((m, i) => ({n: i + 1, color: m.color, cell: m.cell}));
+    // if the painted position has a five, show it
+    const w = findWin();
+    if (w){ winCells = w; status = moves[moves.length - 1].color === 'B' ? 'black_win' : 'white_win'; }
+    else { winCells = null; status = 'playing'; }
+    handicapLeft = 0;
+    render(); renderPanel(); updateSetupUI(); save();
+    toast('摆棋完成，继续对局');
+    if (status !== 'playing') return;
+
+    if (setupNext.value === 'ai'){
+      // hand the turn to the AI: make sure the side to move is the AI's colour
+      const s = actingSide();
+      if (s !== aiSide()){
+        // let the AI move as whichever colour is due; it is a free continuation
+        setTimeout(() => {
+          thinking = true;
+          renderPanel();
+          const myGen = ++gen;
+          setTimeout(() => {
+            if (myGen !== gen){ thinking = false; return; }
+            let res;
+            try { res = aiThink(s); }
+            catch (err){ thinking = false; renderPanel(); toast('AI 出错：' + err.message); return; }
+            if (myGen !== gen) return;
+            thinking = false;
+            if (res.move >= 0) commit(res.move, s);
+            else renderPanel();
+          }, 30);
+        }, 30);
+        return;
+      }
+    }
+    if (!twoPlayer && actingSide() === aiSide()) scheduleAI();
+  }
+
+  setupBtn.addEventListener('click', () => {
+    if (setupMode) exitSetup(); else enterSetup();
+  });
+  paintBlack.addEventListener('click', () => { setupTurn = 'B'; eraseMode = false; updateSetupUI(); });
+  paintWhite.addEventListener('click', () => { setupTurn = 'W'; eraseMode = false; updateSetupUI(); });
+  setupErase.addEventListener('click', () => { eraseMode = !eraseMode; updateSetupUI(); });
+  setupClear.addEventListener('click', () => {
+    board = new Int8Array(225);
+    setupMoves = [];
+    setupTurn = firstSide;
+    render(); renderPanel(); updateSetupUI();
+    toast('棋盘已清空');
+  });
+  setupDone.addEventListener('click', exitSetup);
+
+  copyRecordBtn.addEventListener('click', async () => {
+    const text = buildRecord();
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('棋谱已复制到剪贴板');
+    } catch (e){
+      // fallback for file:// where the clipboard API is unavailable
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+      document.body.removeChild(ta);
+      toast(ok ? '棋谱已复制到剪贴板' : '复制失败，请手动选择下方棋谱');
+      if (!ok) window.prompt('复制下面的棋谱：', text);
+    }
+  });
+
+  function buildRecord(){
+    const lines = [];
+    const mode = twoPlayer ? '双人对战' : `你执${colorName(humanSide)}`;
+    lines.push(`五子棋 15×15 · ${mode} · 先手${colorName(firstSide)}` +
+               (renju ? ' · 禁手' : '') + (handicap ? ' · 让子' : ''));
+    const parts = moves.map(m => `${m.n}.${m.color === 'B' ? '●' : '○'}${m.cell}`);
+    for (let i = 0; i < parts.length; i += 8) lines.push(parts.slice(i, i + 8).join('  '));
+    const result = status === 'playing' ? '进行中'
+                 : status === 'draw' ? '和棋'
+                 : status === 'black_forbidden' ? '黑棋禁手判负'
+                 : (status === 'black_win' ? '黑棋胜' : '白棋胜');
+    lines.push(`结果：${result}（共 ${moves.length} 手）`);
+    return lines.join('\n');
+  }
+
+  togglePanelBtn.addEventListener('click', () => {
+    rulesBox.classList.toggle('collapsed');
+    togglePanelBtn.textContent = rulesBox.classList.contains('collapsed') ? '⚙ 设置' : '⚙ 收起';
+  });
+
+  optRenju.addEventListener('change', () => {
+    renju = optRenju.checked;
+    toast(renju ? '已开启禁手规则' : '已关闭禁手规则');
+    restart();
+  });
+  optHandicap.addEventListener('change', () => {
+    handicap = optHandicap.checked;
+    optHandicapAi.disabled = !handicap;
+    toast(handicap ? '已开启让子模式' : '已关闭让子模式');
+    restart();
+  });
+  optHandicapAi.addEventListener('change', () => {
+    handicapAi = optHandicapAi.checked;
+    toast(handicapAi ? '让子给 AI' : '让子给你');
+    restart();
+  });
+  optNerf.addEventListener('change', () => {
+    nerf = optNerf.checked;
+    toast(nerf ? 'AI 先手时自动降档' : 'AI 全力应对');
+    restart();
+  });
+
+  optTwoPlayer.addEventListener('change', () => {
+    twoPlayer = optTwoPlayer.checked;
+    toast(twoPlayer ? '双人对战：AI 已关闭' : '已恢复人机对战');
+    restart();
+    syncControls();
+  });
+
+  function syncControls(){
+    sideSel.value = humanSide;
+    firstColorSel.value = firstSide;
+    optTwoPlayer.checked = twoPlayer;
+    optRenju.checked = renju;
+    optHandicap.checked = handicap;
+    optHandicapAi.checked = handicapAi;
+    optHandicapAi.disabled = !handicap;
+    optNerf.checked = nerf;
+    sideSel.disabled = twoPlayer;
+    levelSel.disabled = twoPlayer;
+    optNerf.disabled = twoPlayer;
+    optHandicapAi.disabled = !handicap || twoPlayer;
+  }
+
+  sideSel.addEventListener('change', () => {
+    humanSide = sideSel.value;
+    toast('你执' + colorName(humanSide) + '棋');
+    restart();
+  });
+
+  firstColorSel.addEventListener('change', () => {
+    firstSide = firstColorSel.value;
+    toast(colorName(firstSide) + '棋先走');
+    restart();
+  });
+
+  document.addEventListener('keydown', ev => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z'){ ev.preventDefault(); undo(); }
+    else if (!ev.ctrlKey && !ev.metaKey && ev.key.toLowerCase() === 'r'){ ev.preventDefault(); restart(); }
+  });
+
+  // ---------------------------------------------------------------- layout stability
+  // The side panel changes height (move list, setup panel, toasts).  On desktop we
+  // pin the board to a size derived only from the VIEWPORT, so nothing shifts when
+  // the panel grows or shrinks.
+  const mq = (q) => {
+    try {
+      return !!(window.matchMedia && window.matchMedia(q).matches);
+    } catch (e) { return false; }
+  };
+
+  function lockBoardSize(){
+    try {
+      const wide = mq('(min-width: 821px)');
+      const coarse = mq('(pointer: coarse)');
+      if (!wide || coarse){
+        svg.style.width = '';          // phones: CSS handles it
+        svg.style.height = '';
+        return;
+      }
+      const vh = window.innerHeight || 800;
+      const vw = window.innerWidth || 1200;
+      const size = Math.max(260, Math.min(vh * 0.72, vw * 0.58, 640));
+      svg.style.width = size + 'px';
+      svg.style.height = size + 'px';
+    } catch (e) { /* never let layout code break the game */ }
+  }
+  lockBoardSize();
+
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(lockBoardSize, 80);
+  });
+
+  // ---------------------------------------------------------------- boot
+  buildBoard();
+  if (load()){
+    syncControls();
+    render(); renderPanel();
+    if (status === 'playing' && !twoPlayer && actingSide() === aiSide()) scheduleAI();
+  } else {
+    syncControls();
+    render(); renderPanel();
+    if (!twoPlayer && actingSide() === aiSide()) scheduleAI();   // AI opens when it has the first move
+  }
+})();
+</script>
+</body>
+</html>
