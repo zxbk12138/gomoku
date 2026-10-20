@@ -9,8 +9,19 @@ const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m
 console.log('script blocks:', scripts.length);
 if (scripts.length !== 2) { console.log('FAIL: expected 2 script blocks'); process.exit(1); }
 
-// --- 1. the first block must define window.GomokuEngine without require()
-if (/\brequire\s*\(/.test(scripts[0])) { console.log('FAIL: engine block still contains require()'); process.exit(1); }
+// --- 1. the first block must define window.GomokuEngine ---
+// NOTE: require() calls are expected and correct here - the build wraps each
+// engine file in a CommonJS-style factory whose `require` resolves through the
+// inlined module table. An earlier build stripped them, which broke 禁手 with
+// "analyseBlackMove is not defined".
+if (/\brequire\s*\(\s*['"][^'"]+['"]\s*\)/.test(scripts[0])) {
+  const hasForbidden = /require\(\s*['"]\.\/forbidden['"]\s*\)/.test(scripts[0]);
+  if (!hasForbidden) { console.log('FAIL: require() present but forbidden module not wired'); process.exit(1); }
+  if (!/__modules\[\s*['"]forbidden['"]\s*\]/.test(scripts[0])) {
+    console.log('FAIL: forbidden module not registered in the bundle'); process.exit(1);
+  }
+  console.log('OK: require() wired through the inlined module table');
+}
 
 const sandbox = { window: {}, console };
 vm.createContext(sandbox);
