@@ -528,6 +528,8 @@
     const INF = 1e10;
     const TIMEOUT = Symbol('timeout');
 
+    const { analyseBlackMove } = require('./forbidden');
+
     // 5-cell window score used ONLY for move ordering / deltas
     const W5 = [0, 1, 14, 180, 5000, 200000];
 
@@ -1157,6 +1159,8 @@
   let handicapAi = false;  // give the handicap to the AI instead of the human
   let nerf = false;        // weaken the AI when it moves first
   let handicapLeft = 0;    // extra stones the handicap side may still place
+  let handicapPending = false;  // the handicap side just moved and may move again
+  let explicitTurn = null;      // set when the move count no longer implies whose turn it is
 
   // setup / analysis mode ("摆棋")
   let setupMode = false;
@@ -1166,18 +1170,26 @@
 
   const other = (s) => (s === 'B' ? 'W' : 'B');
   const aiSide = () => other(humanSide);
+  /** colour whose turn it is by strict alternation (used as the default) */
   const turn = () => (moves.length % 2 === 0 ? firstSide : other(firstSide));
   const idx = (col, row) => row * N + col;
   const colorName = (s) => (s === 'B' ? '黑' : '白');
   const handicapSide = () => (handicapAi ? aiSide() : humanSide);
 
-  /** whose stone is it right now, taking the handicap into account */
+  /**
+   * Whose turn it is.
+   *
+   * `explicitTurn` wins whenever it is set, because handicap breaks the parity
+   * relationship between the move count and the side to move.
+   */
   function actingSide(){
-    if (handicapLeft > 0 && moves.length > 0) {
-      // the handicap side keeps the turn until its extra stones are used
-      return handicapSide();
-    }
+    if (explicitTurn) return explicitTurn;
     return turn();
+  }
+
+  /** after `color` moved, should the same colour move again (handicap bonus)? */
+  function grantsExtraMove(color){
+    return handicap && handicapLeft > 0 && color === handicapSide();
   }
 
   /** in setup mode the user paints either colour; otherwise normal turn order */
@@ -1412,6 +1424,7 @@
       twoPlayer = !!st.twoPlayer; renju = !!st.renju;
       handicap = !!st.handicap; handicapAi = !!st.handicapAi; nerf = !!st.nerf;
       handicapLeft = st.handicapLeft || 0;
+      explicitTurn = st.explicitTurn || null;
       board = new Int8Array(225);
       moves.forEach(m => { board[parseCoord(m.cell)] = m.color === 'B' ? 1 : 2; });
       return true;
@@ -1454,7 +1467,16 @@
 
     board[cell] = color === 'B' ? 1 : 2;
     moves.push({n: moves.length + 1, color, cell: coordName(cell)});
-    if (handicapLeft > 0) handicapLeft--;
+
+    // Handicap: the handicapped side plays exactly one extra stone.
+    // Because that breaks the move-count parity, the next player is stored
+    // explicitly instead of being derived from moves.length.
+    if (grantsExtraMove(color)) {
+      handicapLeft--;
+      explicitTurn = color;            // same side moves again
+    } else {
+      explicitTurn = other(color);     // normal alternation
+    }
 
     const w = findWin();
     if (w){ winCells = w; status = color === 'B' ? 'black_win' : 'white_win'; }
@@ -1510,6 +1532,8 @@
         return;
       }
       commit(res.move, side);
+      // handicap: the AI may owe a second stone in a row
+      if (status === 'playing' && actingSide() === aiSide()) scheduleAI();
     }, 40);
   }
 
@@ -1672,12 +1696,18 @@
       if (moves.length && moves[moves.length - 1].color === humanSide){ popMove(); removed++; }
     }
     status = 'playing'; winCells = null;
-    // recompute handicap budget
+    // After an undo the handicap has not been used yet unless a bonus stone
+    // survived; recompute it from the remaining move list.
+    explicitTurn = null;
     if (handicap){
-      handicapLeft = moves.length === 0 ? 1 : 0;
+      // the handicapped side has used its bonus iff it has more stones than the other side
+      const hb = moves.filter((m) => m.color === handicapSide()).length;
+      const ob = moves.filter((m) => m.color !== handicapSide()).length;
+      handicapLeft = hb > ob ? 0 : 1;
     } else {
       handicapLeft = 0;
     }
+    handicapPending = false;
     render(); renderPanel(); save();
     if (removed === 0) toast('还没有可以悔的棋');
     else toast('已悔棋');
@@ -1695,6 +1725,8 @@
     moves = []; board = new Int8Array(225);
     status = 'playing'; winCells = null;
     handicapLeft = handicap ? 1 : 0;
+    handicapPending = false;
+    explicitTurn = null;
     render(); renderPanel(); save();
     if (!twoPlayer && actingSide() === aiSide()) scheduleAI();
   }
@@ -1745,33 +1777,32 @@
     if (w){ winCells = w; status = moves[moves.length - 1].color === 'B' ? 'black_win' : 'white_win'; }
     else { winCells = null; status = 'playing'; }
     handicapLeft = 0;
+    explicitTurn = null;
     render(); renderPanel(); updateSetupUI(); save();
     toast('摆棋完成，继续对局');
     if (status !== 'playing') return;
 
     if (setupNext.value === 'ai'){
-      // hand the turn to the AI: make sure the side to move is the AI's colour
+      // Hand the next move to the AI, whichever colour is due.
       const s = actingSide();
-      if (s !== aiSide()){
-        // let the AI move as whichever colour is due; it is a free continuation
-        setTimeout(() => {
-          thinking = true;
-          renderPanel();
-          const myGen = ++gen;
-          setTimeout(() => {
-            if (myGen !== gen){ thinking = false; return; }
-            let res;
-            try { res = aiThink(s); }
-            catch (err){ thinking = false; renderPanel(); toast('AI 出错：' + err.message); return; }
-            if (myGen !== gen) return;
-            thinking = false;
-            if (res.move >= 0) commit(res.move, s);
-            else renderPanel();
-          }, 30);
-        }, 30);
-        return;
-      }
+      gen++;
+      thinking = true;
+      renderPanel();
+      const myGen = gen;
+      setTimeout(() => {
+        if (myGen !== gen) return;
+        let res;
+        try { res = aiThink(s); }
+        catch (err){ thinking = false; renderPanel(); toast('AI 出错：' + err.message); return; }
+        if (myGen !== gen) return;
+        thinking = false;
+        if (res.move >= 0) commit(res.move, s);
+        else renderPanel();
+      }, 30);
+      return;
     }
+
+    // "我来下": the human continues; let the AI answer only if it is its turn
     if (!twoPlayer && actingSide() === aiSide()) scheduleAI();
   }
 
