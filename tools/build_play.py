@@ -33,6 +33,7 @@ SHIM = r"""
 
   window.GomokuEngine = __req('gomoku');
   window.Renju = __req('forbidden');
+  window.DrawSeeker = __req('draw_seeker');
 })();
 """
 
@@ -61,7 +62,8 @@ def strip_module_noise(src: str) -> str:
 
 def build():
     parts = []
-    for name in ("forbidden", "gomoku"):
+    # order matters: dependencies first
+    for name in ("forbidden", "draw_seeker", "gomoku"):
         with open(os.path.join(ENGINE_DIR, name + ".js"), "r", encoding="utf-8") as f:
             body = strip_module_noise(f.read())
         body = "\n".join("    " + ln if ln.strip() else ln for ln in body.splitlines())
@@ -85,8 +87,14 @@ def build():
         raise SystemExit("BUILD ERROR: require('./forbidden') was stripped from the bundle")
     if "__modules['forbidden']" not in html:
         raise SystemExit("BUILD ERROR: forbidden module missing from bundle")
+    if "__modules['draw_seeker']" not in html:
+        raise SystemExit("BUILD ERROR: draw_seeker module missing from bundle")
     if "analyseBlackMove" not in html:
         raise SystemExit("BUILD ERROR: analyseBlackMove missing from bundle")
+    if "chooseDrawMove" not in html:
+        raise SystemExit("BUILD ERROR: chooseDrawMove missing from bundle")
+    if "window.DrawSeeker = __req('draw_seeker')" not in html:
+        raise SystemExit("BUILD ERROR: DrawSeeker not exposed to the page")
 
     print(OUT, len(html), "bytes")
 
