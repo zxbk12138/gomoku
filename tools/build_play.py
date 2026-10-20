@@ -43,10 +43,19 @@ MODULE_WRAP = r"""  __modules[%(name)r] = function(module, exports, require){
 
 
 def strip_module_noise(src: str) -> str:
+    """Remove only what the browser shim cannot handle.
+
+    NOTE: require('./x') calls MUST be kept - the module wrapper provides a
+    `require` parameter that resolves them through the inlined module table.
+    Stripping them (as an earlier version did) left calls like
+    analyseBlackMove() undefined at runtime.
+    """
     src = src.replace("'use strict';", "", 1)
-    src = re.sub(r"^\s*const\s+\{[^}]*\}\s*=\s*require\([^)]*\);?\s*$", "", src, flags=re.M)
-    src = re.sub(r"^\s*const\s+\w+\s*=\s*require\([^)]*\);?\s*$", "", src, flags=re.M)
+    # 'use strict' may appear with double quotes too
+    src = src.replace('"use strict";', "", 1)
+    # ES module syntax is not supported by the shim
     src = re.sub(r"^\s*import .*$", "", src, flags=re.M)
+    src = re.sub(r"^\s*export .*$", "", src, flags=re.M)
     return src
 
 
@@ -70,6 +79,15 @@ def build():
     html = html.replace("/*__ENGINE__*/", payload)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write(html)
+
+    # ---- sanity checks: catch exactly the class of bug that shipped once ----
+    if "require('./forbidden')" not in html:
+        raise SystemExit("BUILD ERROR: require('./forbidden') was stripped from the bundle")
+    if "__modules['forbidden']" not in html:
+        raise SystemExit("BUILD ERROR: forbidden module missing from bundle")
+    if "analyseBlackMove" not in html:
+        raise SystemExit("BUILD ERROR: analyseBlackMove missing from bundle")
+
     print(OUT, len(html), "bytes")
 
 
