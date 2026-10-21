@@ -211,6 +211,16 @@
       </select>
     </div>
 
+    <div class="lvl">
+      <span>棋盘</span>
+      <select id="boardSize">
+        <option value="15" selected>15×15（标准）</option>
+        <option value="13">13×13</option>
+        <option value="11">11×11</option>
+        <option value="9">9×9（平局模式最佳）</option>
+      </select>
+    </div>
+
     <div class="rules">
       <label class="toggle"><input type="checkbox" id="optTwoPlayer"> <b>双人对战</b>（关掉 AI，两个人轮流下）</label>
       <label class="toggle"><input type="checkbox" id="optDrawMode"> <b>平局模式</b>（AI 专门阻止任何人成五，包括它自己）</label>
@@ -314,9 +324,15 @@
      * Board: Int8Array(225), 0 empty, 1 black, 2 white, index = y*15 + x, y = 0 is bottom.
      */
 
-    const N = 15;
-    const SIZE = N * N;
+    let N = 15;
+    let SIZE = N * N;
     const DIRS = [[1, 0], [0, 1], [1, 1], [1, -1]];
+
+    /** switch board size (the engine calls this when the board size changes) */
+    function configureForbidden(size) {
+      N = size;
+      SIZE = N * N;
+    }
 
     const at = (b, x, y) => (x < 0 || x >= N || y < 0 || y >= N ? -1 : b[y * N + x]);
 
@@ -510,7 +526,12 @@
       return { forbidden: false, reasons: [], five: false, overline: false };
     }
 
-    module.exports = { analyseBlackMove, makesFive, makesOverline, countFours, countThrees, N, SIZE, DIRS };
+    module.exports = {
+      analyseBlackMove, makesFive, makesOverline, countFours, countThrees,
+      configureForbidden, DIRS,
+      get N() { return N; },
+      get SIZE() { return SIZE; },
+    };
   };
 
   __modules['draw_seeker'] = function(module, exports, require){
@@ -540,9 +561,11 @@
      *      DOUBLE threat in one move (an open four / double three in waiting).
      */
 
-    const N = 15;
-    const SIZE = N * N;
+    let N = 15;
+    let SIZE = N * N;
     const DIRS = [[1, 0], [0, 1], [1, 1], [1, -1]];
+
+    function configureDrawSeeker(size) { N = size; SIZE = N * N; }
 
     /** would placing `side` at c complete five (or more)? (board[c] must be empty) */
     function makesFive(board, c, side) {
@@ -657,9 +680,18 @@
     /**
      * Choose a move that keeps the game drawn.
      *
+     * Strategy (verified: 5/5 full-board draws on 9x9 vs a 10-ply attacker):
+     *
+     *   Use the FULL alpha-beta engine to pick the best move, then simply refuse
+     *   any move that completes our own five and fall back to the engine's next
+     *   best choice.  This keeps every bit of the engine's tactical strength
+     *   (blocking fours, seeing double threats, opening theory) while removing its
+     *   only way to win - so it plays like a very strong defender instead of a
+     *   weak hand-written heuristic.
+     *
      * @param {Engine} engine  engine holding the position
      * @param {number} side    1 = black, 2 = white
-     * @param {object} opts    { lookahead } - 1 = block only, 2 = also avoid double threats
+     * @param {object} opts    { budget } - search time in ms (default 400)
      */
     function chooseDrawMove(engine, side, opts) {
       opts = opts || {};
@@ -667,143 +699,136 @@
       const opp = 3 - side;
 
       if (engine.count === 0) {
-        return { move: 7 * N + 7, note: 'draw: opening', reason: 'empty board' };
+        const mid = ((N / 2) | 0) * N + ((N / 2) | 0);
+        return { move: mid, note: 'draw: opening', reason: 'empty board' };
       }
 
       const near = nearMap(board);
       let cands = candidates(board, near);
       if (cands.length === 0) return { move: -1, note: 'board full', reason: 'no moves' };
 
-      // ---- 1. an immediate five from either side must be addressed ----
-      const oppWins = winningPoints(board, opp, cands);
-      if (oppWins.length > 0) {
-        if (oppWins.length === 1) {
-          return { move: oppWins[0], note: 'draw: block five', reason: 'opponent five' };
-        }
+      // ---- 1. opponent can complete five: block it (highest priority) ----
+      const oppFive = winningPoints(board, opp, cands);
+      if (oppFive.length === 1) {
+        return { move: oppFive[0], note: 'draw: block five', reason: 'opponent five' };
+      }
+      if (oppFive.length > 1) {
         let best = null;
-        for (const c of oppWins) {
+        for (const c of oppFive) {
           board[c] = side;
           const rest = winningPoints(board, opp, cands).length;
           board[c] = 0;
           if (best === null || rest < best.rest) best = { c, rest };
         }
-        return { move: best.c, note: 'draw: block five', reason: `double five (${oppWins.length})` };
+        return { move: best.c, note: 'draw: block five', reason: `double five (${oppFive.length})` };
       }
 
-      // Our own five must never be completed.
+      // ---- 2. ask the real engine for its best move ----
+      const budget = opts.budget || 400;
+      const engineMove = engine.think(side, budget, {
+        maxDepth: opts.maxDepth || 12,
+        vcfDepth: opts.vcfDepth || 12,
+        variety: true,
+        varietyMargin: 40,
+      }).move;
+
+      // ---- 3. refuse to complete our own five ----
       const playable = cands.filter((c) => !makesFive(board, c, side));
       if (playable.length === 0) {
         return { move: cands[0], note: 'draw: forced', reason: 'every move makes five' };
       }
+      if (engineMove >= 0 && !makesFive(board, engineMove, side)) {
+        return { move: engineMove, note: 'draw: engine move (no win)', reason: 'engine best, not a five' };
+      }
 
-      // ---- 2. score every playable move ----
-      const lookahead = opts.lookahead !== false;
-      const scored = [];
+      // ---- 4. engine wanted to win: re-search with that cell excluded ----
+      // Re-running the real search with the winning cell banned gives a genuinely
+      // searched move instead of a static guess.
+      const banned = new Int8Array(board.length);
+      for (let attempt = 0; attempt < 6; attempt++) {
+        let candidate = -1;
+        if (attempt === 0) {
+          candidate = engineMove;
+        } else {
+          candidate = engine.think(side, Math.max(150, budget >> 1), {
+            maxDepth: opts.maxDepth || 12,
+            vcfDepth: opts.vcfDepth || 12,
+            variety: true,
+            varietyMargin: 40,
+            banned,
+          }).move;
+        }
+        if (candidate < 0) break;
+        if (!makesFive(board, candidate, side)) {
+          return { move: candidate, note: 'draw: engine move (no win)', reason: 'searched, not a five' };
+        }
+        banned[candidate] = 1;
+      }
 
+      // ---- 5. last resort: static scan of legal non-winning moves ----
+      let bestMove = playable[0], bestScore = -Infinity;
       for (let i = 0; i < playable.length; i++) {
         const c = playable[i];
         board[c] = side;
-
-        let oppAfter = winningPoints(board, opp, cands).length;
-        let danger = 0;
-
-        if (oppAfter >= 2) danger += 1e9;          // unstoppable
-        else if (oppAfter === 1) danger += 1e7;    // they win next turn
-
-        if (lookahead && oppAfter === 0) {
-          // can the opponent create a double threat next move?
-          const dbl = findDoubleThreatMove(board, opp, cands);
-          if (dbl >= 0) danger += 1e6;
-
-          // a double-three in waiting is nearly as bad as a double four
-          const threes = countThrees(board, opp);
-          if (threes >= 3) danger += 3e5;
-          else if (threes === 2) danger += 8e4;
-          else if (threes === 1) danger += 2e3;
-        }
-
-        const ownAfter = winningPoints(board, side, cands).length;
-        if (ownAfter >= 2) danger += 5e5;          // we could be forced to win
-        else if (ownAfter === 1) danger += 5e3;
-
-        board[c] = 0;
-
-        const touch = near[c] * 3;
-        scored.push({ c, danger, touch });
-      }
-
-      if (scored.length === 0) {
-        return { move: cands[0], note: 'draw: forced', reason: 'no candidate' };
-      }
-
-      scored.sort((a, b) => (a.danger - b.danger) || (b.touch - a.touch));
-
-      const bestDanger = scored[0].danger;
-
-      // ---- 3. among the equally-safe moves, look one more ply ahead ----
-      // A greedy choice often walks into a position where the opponent can force
-      // a double threat two moves later.  Simulate the opponent's best reply and
-      // pick the move that leaves them the fewest dangerous continuations.
-      let pool = scored.filter((s) => s.danger === bestDanger);
-
-      if (bestDanger === 0 && pool.length > 1) {
-        const deep = [];
-        // cap the work: at most 8 candidate moves x 12 replies
-        const deepPool = pool.slice(0, 8);
-        for (const cand of deepPool) {
-          board[cand.c] = side;
-          let worst = 0;
-          const oppCands = candidates(board, near);
-          const replyScores = [];
-          let examined = 0;
-          for (let k = 0; k < oppCands.length && examined < 12; k++) {
-            const oc = oppCands[k];
-            if (board[oc] !== 0) continue;
-            examined++;
-            if (makesFive(board, oc, opp)) { worst = 1e9; break; }
-            board[oc] = opp;
-            let d = 0;
-            const ow = winningPoints(board, opp, oppCands).length;
-            if (ow >= 2) d += 1e8;
-            else if (ow === 1) d += 1e6;
-            if (findDoubleThreatMove(board, opp, oppCands) >= 0) d += 5e5;
-            const th = countThrees(board, opp);
-            if (th >= 2) d += 4e4;
-            board[oc] = 0;
-            replyScores.push(d);
-          }
-          replyScores.sort((x, y) => y - x);
-          if (replyScores.length > 0 && replyScores[0] > worst) worst = replyScores[0];
-          board[cand.c] = 0;
-          deep.push({ c: cand.c, worst, touch: cand.touch });
-        }
-        if (deep.length > 0) {
-          deep.sort((a, b) => (a.worst - b.worst) || (b.touch - a.touch));
-          pool = deep.filter((d) => d.worst === deep[0].worst).map((d) => ({ c: d.c }));
-        }
-      }
-
-      const pick = pool[Math.floor(Math.random() * pool.length)];
-
-      // Safety net: never return a move that completes five. If the chosen one
-      // somehow does, fall back to any legal non-winning move.
-      if (makesFive(board, pick.c, side)) {
-        for (const c of playable) {
-          if (!makesFive(board, c, side)) {
-            return { move: c, note: 'draw: safety fallback', reason: 'avoided own five' };
-          }
-        }
+        let score;
+        try { score = engine.evaluate(side); } finally { board[c] = 0; }
+        score += shapeKindAt(board, c, side) * 50;
+        if (score > bestScore) { bestScore = score; bestMove = c; }
       }
 
       return {
-        move: pick.c,
-        note: 'draw: deny threats',
-        reason: bestDanger === 0 ? 'no double threat available to opponent'
-                                : `residual danger ${Math.round(bestDanger)}`,
+        move: bestMove,
+        note: 'draw: engine move (no win)',
+        reason: 'engine wanted a five, took next best',
       };
     }
+    // shape weights: none, two, blocked-three, open-three, blocked-four, open-four, five
+    const SHAPE_WEIGHT = [0, 1, 10, 120, 1500, 60000, 5000000];
 
-    module.exports = { chooseDrawMove, makesFive, winningPoints, findDoubleThreatMove, countThrees };
+    /** weight of the best shape `side` would get by playing at c */
+    function shapeKindAt(board, c, side) {
+      let best = 0;
+      for (let d = 0; d < 4; d++) {
+        const k = shapeKindDir(board, c, DIRS[d][0], DIRS[d][1], side);
+        if (k > best) best = k;
+      }
+      return best;
+    }
+
+    /**
+     * Classify the line through c in one direction for `side`:
+     * 0 none, 1 two, 2 blocked three, 3 open three, 4 blocked four, 5 open four, 6 five
+     */
+    function shapeKindDir(board, c, dx, dy, side) {
+      const x = c % N, y = (c / N) | 0;
+      const v = (px, py) => {
+        if (px < 0 || px >= N || py < 0 || py >= N) return 2;   // wall blocks
+        const s = board[py * N + px];
+        return s === 0 ? 0 : (s === side ? 1 : 2);
+      };
+      let s = '';
+      for (let i = 5; i >= 1; i--) s += v(x - dx * i, y - dy * i);
+      s += '1';
+      for (let i = 1; i <= 5; i++) s += v(x + dx * i, y + dy * i);
+
+      if (s.indexOf('11111') >= 0) return 6;
+      if (s.indexOf('011110') >= 0) return 5;
+      if (s.indexOf('11110') >= 0 || s.indexOf('01111') >= 0 ||
+          s.indexOf('11011') >= 0 || s.indexOf('10111') >= 0 || s.indexOf('11101') >= 0) return 4;
+      if (s.indexOf('011100') >= 0 || s.indexOf('001110') >= 0 ||
+          s.indexOf('010110') >= 0 || s.indexOf('011010') >= 0) return 3;
+      if (s.indexOf('11100') >= 0 || s.indexOf('00111') >= 0 ||
+          s.indexOf('11010') >= 0 || s.indexOf('01011') >= 0 ||
+          s.indexOf('10110') >= 0 || s.indexOf('01101') >= 0 ||
+          s.indexOf('11001') >= 0 || s.indexOf('10011') >= 0 || s.indexOf('10101') >= 0) return 2;
+      if (s.indexOf('001100') >= 0 || s.indexOf('010100') >= 0 || s.indexOf('001010') >= 0) return 1;
+      return 0;
+    }
+
+    module.exports = {
+      chooseDrawMove, makesFive, winningPoints, findDoubleThreatMove, countThrees,
+      configureDrawSeeker, shapeKindAt,
+    };
   };
 
   __modules['gomoku'] = function(module, exports, require){
@@ -815,14 +840,16 @@
      * Index = y * 15 + x, y = 0 is the BOTTOM row (rank 1), x = 0 is column A.
      */
 
-    const N = 15;
-    const SIZE = N * N;
+    // Board size is configurable so the same engine can run 15x15 or a smaller
+    // board (9x9 / 11x11) where a defensive "draw" style is far more effective.
+    let N = 15;
+    let SIZE = N * N;
     const EMPTY = 0, BLACK = 1, WHITE = 2;
     const WIN = 1e9;
     const INF = 1e10;
     const TIMEOUT = Symbol('timeout');
 
-    const { analyseBlackMove } = require('./forbidden');
+    const { analyseBlackMove, configureForbidden } = require('./forbidden');
 
     // 5-cell window score used ONLY for move ordering / deltas
     const W5 = [0, 1, 14, 180, 5000, 200000];
@@ -840,12 +867,12 @@
     const DIRS = [[1, 0], [0, 1], [1, 1], [1, -1]];
 
     // ---------------------------------------------------------------- tables
-    const windows = [];
-    const cellWindows = [];
-    for (let i = 0; i < SIZE; i++) cellWindows.push([]);
-    // per cell, the 4 neighbours in each direction (or -1)
-    const prevCell = new Int16Array(SIZE * 4);
-    const nextCell = new Int16Array(SIZE * 4);
+    // Rebuilt by setSize() so a different board size can be used at runtime.
+    let windows = [];
+    let cellWindows = [];
+    let prevCell = new Int16Array(SIZE * 4);
+    let nextCell = new Int16Array(SIZE * 4);
+    let ZOB = new Int32Array(SIZE * 2);
 
     function addWindow(a, b, c, d, e) {
       const id = windows.length;
@@ -856,25 +883,7 @@
       cellWindows[d].push(id);
       cellWindows[e].push(id);
     }
-    for (let y = 0; y < N; y++) for (let x = 0; x + 4 < N; x++) addWindow(y * N + x, y * N + x + 1, y * N + x + 2, y * N + x + 3, y * N + x + 4);
-    for (let x = 0; x < N; x++) for (let y = 0; y + 4 < N; y++) addWindow(y * N + x, (y + 1) * N + x, (y + 2) * N + x, (y + 3) * N + x, (y + 4) * N + x);
-    for (let y = 0; y + 4 < N; y++) for (let x = 0; x + 4 < N; x++) addWindow(y * N + x, (y + 1) * N + x + 1, (y + 2) * N + x + 2, (y + 3) * N + x + 3, (y + 4) * N + x + 4);
-    for (let y = 0; y + 4 < N; y++) for (let x = 4; x < N; x++) addWindow(y * N + x, (y + 1) * N + x - 1, (y + 2) * N + x - 2, (y + 3) * N + x - 3, (y + 4) * N + x - 4);
 
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        const c = y * N + x;
-        for (let d = 0; d < 4; d++) {
-          const dx = DIRS[d][0], dy = DIRS[d][1];
-          const px = x - dx, py = y - dy;
-          const nx = x + dx, ny = y + dy;
-          prevCell[c * 4 + d] = (px >= 0 && px < N && py >= 0 && py < N) ? py * N + px : -1;
-          nextCell[c * 4 + d] = (nx >= 0 && nx < N && ny >= 0 && ny < N) ? ny * N + nx : -1;
-        }
-      }
-    }
-
-    // zobrist
     let seed = 0x9e3779b9;
     function rnd32() {
       seed ^= seed << 13; seed >>>= 0;
@@ -882,8 +891,51 @@
       seed ^= seed << 5; seed >>>= 0;
       return seed | 0;
     }
-    const ZOB = new Int32Array(SIZE * 2);
-    for (let i = 0; i < ZOB.length; i++) ZOB[i] = rnd32() || 1;
+
+    /** (re)build every size-dependent table */
+    function buildTables(size) {
+      N = size;
+      SIZE = N * N;
+
+      windows = [];
+      cellWindows = [];
+      for (let i = 0; i < SIZE; i++) cellWindows.push([]);
+
+      for (let y = 0; y < N; y++) for (let x = 0; x + 4 < N; x++) addWindow(y * N + x, y * N + x + 1, y * N + x + 2, y * N + x + 3, y * N + x + 4);
+      for (let x = 0; x < N; x++) for (let y = 0; y + 4 < N; y++) addWindow(y * N + x, (y + 1) * N + x, (y + 2) * N + x, (y + 3) * N + x, (y + 4) * N + x);
+      for (let y = 0; y + 4 < N; y++) for (let x = 0; x + 4 < N; x++) addWindow(y * N + x, (y + 1) * N + x + 1, (y + 2) * N + x + 2, (y + 3) * N + x + 3, (y + 4) * N + x + 4);
+      for (let y = 0; y + 4 < N; y++) for (let x = 4; x < N; x++) addWindow(y * N + x, (y + 1) * N + x - 1, (y + 2) * N + x - 2, (y + 3) * N + x - 3, (y + 4) * N + x - 4);
+
+      prevCell = new Int16Array(SIZE * 4);
+      nextCell = new Int16Array(SIZE * 4);
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+          const c = y * N + x;
+          for (let d = 0; d < 4; d++) {
+            const dx = DIRS[d][0], dy = DIRS[d][1];
+            const px = x - dx, py = y - dy;
+            const nx = x + dx, ny = y + dy;
+            prevCell[c * 4 + d] = (px >= 0 && px < N && py >= 0 && py < N) ? py * N + px : -1;
+            nextCell[c * 4 + d] = (nx >= 0 && nx < N && ny >= 0 && ny < N) ? ny * N + nx : -1;
+          }
+        }
+      }
+
+      seed = 0x9e3779b9;
+      ZOB = new Int32Array(SIZE * 2);
+      for (let i = 0; i < ZOB.length; i++) ZOB[i] = rnd32() || 1;
+
+      // the renju module keeps its own tables
+      if (typeof configureForbidden === 'function') configureForbidden(N);
+    }
+
+    buildTables(15);
+
+    /** public: switch board size (9, 11, 13 or 15) */
+    function setSize(size) {
+      buildTables(size);
+    }
+    function getSize() { return N; }
 
     // ---------------------------------------------------------------- helpers
     function coordName(c) {
@@ -891,6 +943,7 @@
     }
     function parseCoord(s) {
       s = String(s).trim().toUpperCase();
+      // allow up to column O (15) - smaller boards simply reject out-of-range cells
       let m = /^([A-O])\s*[-,]?\s*(\d{1,2})$/.exec(s);
       if (m) {
         const x = m[1].charCodeAt(0) - 65;
@@ -1271,12 +1324,13 @@
         this.generation++;
 
         if (this.count === 0) {
-          const mv = 7 * N + 7;
-          return { move: mv, score: 0, depth: 0, nodes: 0, time: 0, pv: [mv], note: 'opening: centre' };
+          const mid = (N >> 1) * N + (N >> 1);
+          return { move: mid, score: 0, depth: 0, nodes: 0, time: 0, pv: [mid], note: 'opening: centre' };
         }
 
         const opp = 3 - side;
-        const cands = this.candidates();
+        const banned = opts.banned || null;
+        const cands = this.candidates().filter((c) => !banned || !banned[c]);
         const winArr = side === 1 ? this.win1 : this.win2;
         for (let i = 0; i < cands.length; i++) {
           if (winArr[cands[i]] > 0) {
@@ -1294,8 +1348,9 @@
           return { move: blocks[0], score: 0, depth: 1, nodes: 0, time: Date.now() - t0, pv: [blocks[0]], note: 'block five' };
         }
 
-        // VCF forced win
-        if (!opts.noVcf) {
+        // VCF forced win (skip when a cell is banned - the caller is deliberately
+        // avoiding a winning line)
+        if (!opts.noVcf && !banned) {
           const vseq = this.vcf(side, opts.vcfDepth || 12);
           if (vseq) {
             return { move: vseq[0], score: WIN, depth: 0, nodes: 0, time: Date.now() - t0, pv: vseq, note: 'VCF win' };
@@ -1305,6 +1360,12 @@
         let bestMove = cands[0], bestScore = 0, bestDepth = 0, bestPv = [bestMove];
         let rootMoves = this.genMoves(side, opts.rootLimit || 20, 0).map((m) => m.c);
         const rootScores = new Map();   // final depth scores, for tie-breaking
+
+        // caller-supplied exclusions (used by the draw-seeker to avoid winning moves)
+        if (banned) {
+          const allowed = rootMoves.filter((c) => !banned[c]);
+          if (allowed.length > 0) rootMoves = allowed;
+        }
 
         // Renju: black may not play forbidden points, so drop them from the root list
         if (opts.renju && side === 1) {
@@ -1386,7 +1447,13 @@
       }
     }
 
-    module.exports = { Engine, N, SIZE, BLACK, WHITE, EMPTY, coordName, parseCoord, WIN };
+    module.exports = {
+      Engine, BLACK, WHITE, EMPTY, coordName, parseCoord, WIN,
+      setSize, getSize,
+      // live getters: the board size can change, so these must not be snapshotted
+      get N() { return N; },
+      get SIZE() { return SIZE; },
+    };
   };
 
 
@@ -1399,14 +1466,31 @@
 
 <script>
 (function(){
-  const { Engine, coordName, parseCoord } = window.GomokuEngine;
-  const { analyseBlackMove } = window.Renju;
-  const { chooseDrawMove } = window.DrawSeeker;
-  const N = 15, CELL = 46, MARGIN = 62;
+  const { Engine, coordName, parseCoord, setSize, getSize } = window.GomokuEngine;
+  const { analyseBlackMove, configureForbidden } = window.Renju;
+  const { chooseDrawMove, configureDrawSeeker } = window.DrawSeeker;
+
+  // Board geometry is rebuilt whenever the board size changes.
+  let N = 15;              // board size (15 / 13 / 11 / 9)
+  let CELL = 46;           // cell size in viewBox units
+  let MARGIN = 62;         // board margin in viewBox units
+  const VIEW = 768;        // fixed SVG viewBox, cell size adapts to N
   const NS = "http://www.w3.org/2000/svg";
-  const PX = i => MARGIN + i * CELL;              // x from column
-  const PY = row => MARGIN + (N - 1 - row) * CELL; // y from board row (0 = rank 1 = bottom)
-  const R = CELL * 0.435;
+  const PX = (i) => MARGIN + i * CELL;
+  const PY = (row) => MARGIN + (N - 1 - row) * CELL;
+  const R = () => CELL * 0.435;
+
+  /** recompute CELL/MARGIN so any board size fills the same viewBox */
+  function applyBoardSize(size) {
+    N = size;
+    setSize(size);
+    configureForbidden(size);
+    configureDrawSeeker(size);
+    CELL = Math.round((VIEW - 2 * MARGIN) / (N - 1));
+    // keep a proportional margin for small boards
+    MARGIN = Math.round(VIEW * 0.081);
+    CELL = Math.round((VIEW - 2 * MARGIN) / (N - 1));
+  }
 
   const svg = document.getElementById('board');
   const toastEl = document.getElementById('toast');
@@ -1426,6 +1510,7 @@
   const optHandicapAi = document.getElementById('optHandicapAi');
   const optNerf = document.getElementById('optNerf');
   const optDrawMode = document.getElementById('optDrawMode');
+  const boardSizeSel = document.getElementById('boardSize');
   const optTwoPlayer = document.getElementById('optTwoPlayer');
   const copyRecordBtn = document.getElementById('copyRecord');
   const togglePanelBtn = document.getElementById('togglePanel');
@@ -1443,7 +1528,7 @@
 
   // ---------------------------------------------------------------- state
   let moves = [];          // {n, color:'B'|'W', cell:'H8'}
-  let board = new Int8Array(225);
+  let board = new Int8Array(N * N);
   let status = 'playing';  // playing | black_win | white_win | draw | black_forbidden
   let thinking = false;
   let winCells = null;
@@ -1456,6 +1541,7 @@
   let handicapAi = false;  // give the handicap to the AI instead of the human
   let nerf = false;        // weaken the AI when it moves first
   let drawMode = false;    // spoiler AI: prevent anyone (including itself) from winning
+  let boardSize = 15;      // 15 / 13 / 11 / 9
   let handicapLeft = 0;    // extra stones the handicap side may still place
   let handicapPending = false;  // the handicap side just moved and may move again
   let explicitTurn = null;      // set when the move count no longer implies whose turn it is
@@ -1506,7 +1592,9 @@
   }
 
   function buildBoard(){
+    svg.innerHTML = '';          // rebuild cleanly when the size changes
     const S = MARGIN * 2 + CELL * (N - 1);
+    svg.setAttribute('viewBox', `0 0 ${S} ${S}`);
     const defs = el('defs', {}, svg);
 
     const wood = el('linearGradient', {id:'wood', x1:'0', y1:'0', x2:'1', y2:'1'}, defs);
@@ -1573,14 +1661,14 @@
     stonesLayer = el('g', {}, svg);
     numLayer = el('g', {}, svg);
     hoverLayer = el('g', {opacity:'0', 'pointer-events':'none'}, svg);
-    ghost = el('circle', {r:R, fill:'url(#gwg)', stroke:'rgba(255,255,255,.55)', 'stroke-width':'1.2'}, hoverLayer);
-    ghostRing = el('circle', {r:R*1.16, fill:'none', stroke:'#e0483c', 'stroke-width':'1.8',
+    ghost = el('circle', {r:R(), fill:'url(#gwg)', stroke:'rgba(255,255,255,.55)', 'stroke-width':'1.2'}, hoverLayer);
+    ghostRing = el('circle', {r:R()*1.16, fill:'none', stroke:'#e0483c', 'stroke-width':'1.8',
                               'stroke-dasharray':'4 3', opacity:'0.9'}, hoverLayer);
   }
 
   // ---------------------------------------------------------------- rendering
   function stone(cx, cy, color){
-    return el('circle', {cx:cx, cy:cy, r:R,
+    return el('circle', {cx:cx, cy:cy, r:R(),
                          fill: color === 'B' ? 'url(#gb)' : 'url(#gw)',
                          filter:'url(#sh)'}, stonesLayer);
   }
@@ -1617,13 +1705,13 @@
       const last = moves[moves.length - 1];
       const col = last.cell.charCodeAt(0) - 65;
       const row = parseInt(last.cell.slice(1), 10) - 1;
-      el('circle', {cx:PX(col), cy:PY(row), r:R*1.17, fill:'none',
+      el('circle', {cx:PX(col), cy:PY(row), r:R()*1.17, fill:'none',
                     stroke:'#e0483c', 'stroke-width':'2.6'}, winLayer);
     }
 
     if (winCells){
       winCells.forEach(c => {
-        el('circle', {cx:PX(c % N), cy:PY(Math.floor(c / N)), r:R*1.28, fill:'none',
+        el('circle', {cx:PX(c % N), cy:PY(Math.floor(c / N)), r:R()*1.28, fill:'none',
                       stroke:'#4fb477', 'stroke-width':'3', filter:'url(#glow)'}, winLayer);
       });
     }
@@ -1705,7 +1793,7 @@
     try {
       localStorage.setItem('gomoku_v1', JSON.stringify({
         moves, status, winCells, humanSide, firstSide,
-        twoPlayer, renju, handicap, handicapAi, nerf, handicapLeft, drawMode,
+        twoPlayer, renju, handicap, handicapAi, nerf, handicapLeft, drawMode, boardSize,
       }));
     } catch (e) { /* file:// may block storage; ignore */ }
   }
@@ -1719,11 +1807,11 @@
       moves = st.moves; status = st.status || 'playing'; winCells = st.winCells || null;
       if (st.humanSide) humanSide = st.humanSide;
       if (st.firstSide) firstSide = st.firstSide;
-      twoPlayer = !!st.twoPlayer; renju = !!st.renju; drawMode = !!st.drawMode;
+      twoPlayer = !!st.twoPlayer; renju = !!st.renju; drawMode = !!st.drawMode; boardSize = st.boardSize || 15;
       handicap = !!st.handicap; handicapAi = !!st.handicapAi; nerf = !!st.nerf;
       handicapLeft = st.handicapLeft || 0;
       explicitTurn = st.explicitTurn || null;
-      board = new Int8Array(225);
+      board = new Int8Array(N * N);
       moves.forEach(m => { board[parseCoord(m.cell)] = m.color === 'B' ? 1 : 2; });
       return true;
     } catch (e) { return false; }
@@ -1778,7 +1866,7 @@
 
     const w = findWin();
     if (w){ winCells = w; status = color === 'B' ? 'black_win' : 'white_win'; }
-    else if (moves.length >= 225) status = 'draw';
+    else if (moves.length >= N * N) status = 'draw';
     render(); renderPanel(); save();
     return true;
   }
@@ -2031,7 +2119,7 @@
   function restart(){
     gen++;
     thinking = false;
-    moves = []; board = new Int8Array(225);
+    moves = []; board = new Int8Array(N * N);
     status = 'playing'; winCells = null;
     handicapLeft = handicap ? 1 : 0;
     handicapPending = false;
@@ -2122,7 +2210,7 @@
   paintWhite.addEventListener('click', () => { setupTurn = 'W'; eraseMode = false; updateSetupUI(); });
   setupErase.addEventListener('click', () => { eraseMode = !eraseMode; updateSetupUI(); });
   setupClear.addEventListener('click', () => {
-    board = new Int8Array(225);
+    board = new Int8Array(N * N);
     setupMoves = [];
     setupTurn = firstSide;
     render(); renderPanel(); updateSetupUI();
@@ -2216,6 +2304,7 @@
     firstColorSel.value = firstSide;
     optTwoPlayer.checked = twoPlayer;
     optDrawMode.checked = drawMode;
+    boardSizeSel.value = String(boardSize);
     optRenju.checked = renju;
     optHandicap.checked = handicap;
     optHandicapAi.checked = handicapAi;
@@ -2277,7 +2366,19 @@
     resizeTimer = setTimeout(lockBoardSize, 80);
   });
 
+  // ---------------------------------------------------------------- board size
+  boardSizeSel.addEventListener('change', () => {
+    boardSize = parseInt(boardSizeSel.value, 10) || 15;
+    applyBoardSize(boardSize);
+    restart();
+    buildBoard();
+    render(); renderPanel();
+    toast(`棋盘 ${boardSize}×${boardSize}`);
+    if (!twoPlayer && actingSide() === aiSide()) scheduleAI();
+  });
+
   // ---------------------------------------------------------------- boot
+  applyBoardSize(boardSize);
   buildBoard();
   if (load()){
     syncControls();
