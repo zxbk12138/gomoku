@@ -141,6 +141,135 @@ function countThrees(board, side) {
 }
 
 /**
+ * SPOILER MODE ("搅局模式").
+ *
+ * The passive draw-seeker only ever defends, so a real attacker keeps the
+ * initiative and eventually builds an unstoppable double threat.  The spoiler
+ * tries to steal that initiative:
+ *
+ *   1. never complete our own five (we do not want to win),
+ *   2. always block an immediate opponent five,
+ *   3. otherwise prefer moves that create a FOUR for us.  A four is forcing:
+ *      the opponent must answer it or lose, so their own attack is interrupted.
+ *      We will never actually convert that four into five - but they cannot
+ *      know that, and every tempo we steal is an attacking move they did not get.
+ *   4. if no four is available, create an open three (also forcing), and
+ *   5. finally fall back to the safest quiet move.
+ *
+ * This keeps the opponent permanently on the back foot while we remain unable
+ * to win, which is exactly what "搅局" means.
+ *
+ * @param {Engine} engine  engine holding the position
+ * @param {number} side    1 = black, 2 = white
+ * @param {object} opts    { budget, chaos } - chaos scales the tempo bonus
+ */
+function chooseSpoilerMove(engine, side, opts) {
+  opts = opts || {};
+  const board = engine.board;
+  const opp = 3 - side;
+  const chaos = opts.chaos != null ? opts.chaos : 1;
+
+  if (engine.count === 0) {
+    const mid = ((N / 2) | 0) * N + ((N / 2) | 0);
+    return { move: mid, note: 'spoiler: opening', reason: 'empty board' };
+  }
+
+  const near = nearMap(board);
+  const cands = candidates(board, near);
+  if (cands.length === 0) return { move: -1, note: 'board full', reason: 'no moves' };
+
+  // ---- 1. block an immediate opponent five ----
+  const oppFive = winningPoints(board, opp, cands);
+  if (oppFive.length === 1) {
+    return { move: oppFive[0], note: 'spoiler: block five', reason: 'opponent five' };
+  }
+  if (oppFive.length > 1) {
+    let best = null;
+    for (const c of oppFive) {
+      board[c] = side;
+      const rest = winningPoints(board, opp, cands).length;
+      board[c] = 0;
+      if (best === null || rest < best.rest) best = { c, rest };
+    }
+    return { move: best.c, note: 'spoiler: block five', reason: `double five (${oppFive.length})` };
+  }
+
+  // ---- 2. never complete our own five ----
+  const playable = cands.filter((c) => !makesFive(board, c, side));
+  if (playable.length === 0) {
+    return { move: cands[0], note: 'spoiler: forced', reason: 'every move makes five' };
+  }
+
+  // ---- 3. score: tempo (our threats) vs risk (their threats) ----
+  const scored = [];
+  for (let i = 0; i < playable.length; i++) {
+    const c = playable[i];
+    board[c] = side;
+
+    // our forcing power after this move
+    let myFours = 0, myThrees = 0;
+    const after = candidates(board, near);
+    for (let k = 0; k < after.length; k++) {
+      const oc = after[k];
+      if (board[oc] !== 0) continue;
+      const kind = shapeKindAt(board, oc, side);
+      if (kind === 4 || kind === 5) myFours++;       // blocked/open four
+      else if (kind === 3) myThrees++;
+    }
+
+    // what the opponent gets in return
+    let theirFours = 0, theirThrees = 0, theirFives = 0;
+    for (let k = 0; k < after.length; k++) {
+      const oc = after[k];
+      if (board[oc] !== 0) continue;
+      const kind = shapeKindAt(board, oc, opp);
+      if (kind === 6) theirFives++;
+      else if (kind === 4 || kind === 5) theirFours++;
+      else if (kind === 3) theirThrees++;
+    }
+
+    board[c] = 0;
+
+    // Priorities, in order:
+    //   1. never let the opponent have a four or a five,
+    //   2. remove their open threes (a double open three is what kills us),
+    //   3. only then spend moves on our own tempo.
+    // Building our own four costs a stone that could have blocked something,
+    // so it must stay strictly secondary.
+    let score = 0;
+    score -= theirFives * 1e9;
+    score -= theirFours * 5e7;
+    score -= theirThrees * 2e6;          // blocking their three is very valuable
+    score += myFours * 4000 * chaos;     // small nudge: a four still costs them a move
+    score += myThrees * 200 * chaos;
+    score += near[c] * 2;
+
+    scored.push({ c, score, myFours, myThrees, theirFours, theirThrees });
+  }
+
+  if (scored.length === 0) {
+    return { move: playable[0], note: 'spoiler: forced', reason: 'no candidate' };
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // among equally good moves pick randomly so games differ
+  const bestScore = scored[0].score;
+  const pool = scored.filter((s) => s.score >= bestScore - Math.abs(bestScore) * 0.001 - 1);
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+
+  const note = pick.myFours > 0 ? 'spoiler: forcing four'
+             : pick.myThrees > 0 ? 'spoiler: forcing three'
+             : 'spoiler: quiet move';
+
+  return {
+    move: pick.c,
+    note,
+    reason: `tempo: ${pick.myFours} fours, ${pick.myThrees} threes`,
+  };
+}
+
+/**
  * Choose a move that keeps the game drawn.
  *
  * Strategy (verified: 5/5 full-board draws on 9x9 vs a 10-ply attacker):
@@ -289,6 +418,6 @@ function shapeKindDir(board, c, dx, dy, side) {
 }
 
 module.exports = {
-  chooseDrawMove, makesFive, winningPoints, findDoubleThreatMove, countThrees,
-  configureDrawSeeker, shapeKindAt,
+  chooseDrawMove, chooseSpoilerMove, makesFive, winningPoints, findDoubleThreatMove,
+  countThrees, configureDrawSeeker, shapeKindAt,
 };
