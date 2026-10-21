@@ -20,9 +20,15 @@
  * Board: Int8Array(225), 0 empty, 1 black, 2 white, index = y*15 + x, y = 0 is bottom.
  */
 
-const N = 15;
-const SIZE = N * N;
+let N = 15;
+let SIZE = N * N;
 const DIRS = [[1, 0], [0, 1], [1, 1], [1, -1]];
+
+/** switch board size (the engine calls this when the board size changes) */
+function configureForbidden(size) {
+  N = size;
+  SIZE = N * N;
+}
 
 const at = (b, x, y) => (x < 0 || x >= N || y < 0 || y >= N ? -1 : b[y * N + x]);
 
@@ -216,4 +222,9 @@ function analyseBlackMove(board, x, y) {
   return { forbidden: false, reasons: [], five: false, overline: false };
 }
 
-module.exports = { analyseBlackMove, makesFive, makesOverline, countFours, countThrees, N, SIZE, DIRS };
+module.exports = {
+  analyseBlackMove, makesFive, makesOverline, countFours, countThrees,
+  configureForbidden, DIRS,
+  get N() { return N; },
+  get SIZE() { return SIZE; },
+};
