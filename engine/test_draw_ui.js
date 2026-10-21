@@ -42,8 +42,8 @@ function makeDom() {
     console.log('== 平局模式开关 ==');
     const t = makeDom();
     await sleep(600);
-    ok('checkbox exists', !!t.doc.getElementById('optDrawMode'));
-    t.setCheck('optDrawMode', true);
+    ok('mode selector exists', !!t.doc.getElementById('optDrawMode'));
+    t.setSel('optDrawMode', 'draw');
     await sleep(2500);
     ok('toast confirms mode', t.toast().includes('平局模式'), `-> "${t.toast()}"`);
     ok('AI still opens', t.moves().length === 1, `-> ${JSON.stringify(t.moves())}`);
@@ -56,7 +56,7 @@ function makeDom() {
     console.log('== AI 不主动成五 ==');
     const t = makeDom();
     await sleep(600);
-    t.setCheck('optDrawMode', true);
+    t.setSel('optDrawMode', 'draw');
     await sleep(2000);
     // Give the AI (black) a strong position by playing white far away, so the
     // AI would normally build a five quickly. In draw mode it must not win.
@@ -78,7 +78,7 @@ function makeDom() {
     console.log('== AI 会阻止玩家成五 ==');
     const t = makeDom();
     await sleep(600);
-    t.setCheck('optDrawMode', true);
+    t.setSel('optDrawMode', 'draw');
     await sleep(2000);
     // Human plays white; try to build a horizontal four. The AI must interfere.
     // We check that the AI never allows an unblocked four-in-a-row with open ends.
@@ -98,7 +98,7 @@ function makeDom() {
     console.log('== 平局模式下对局能持续很久 ==');
     const t = makeDom();
     await sleep(600);
-    t.setCheck('optDrawMode', true);
+    t.setSel('optDrawMode', 'draw');
     await sleep(2000);
     // play a scatter of human moves; the AI should keep answering without winning
     const spots = [];
@@ -123,7 +123,7 @@ function makeDom() {
     await sleep(600);
     t.setCheck('optTwoPlayer', true);
     await sleep(500);
-    t.setCheck('optDrawMode', true);
+    t.setSel('optDrawMode', 'draw');
     await sleep(2200);
     ok('two-player turned off', !t.doc.getElementById('optTwoPlayer').checked);
     ok('AI is playing again', t.moves().length >= 1, `-> ${JSON.stringify(t.moves())}`);
@@ -135,11 +135,11 @@ function makeDom() {
     console.log('== 重开后仍是平局模式 ==');
     const t = makeDom();
     await sleep(600);
-    t.setCheck('optDrawMode', true);
+    t.setSel('optDrawMode', 'draw');
     await sleep(2000);
     t.press('restart');
     await sleep(2000);
-    ok('draw mode still checked', t.doc.getElementById('optDrawMode').checked);
+    ok('draw mode still selected', t.doc.getElementById('optDrawMode').value === 'draw');
     ok('AI opened after restart', t.moves().length === 1, `-> ${JSON.stringify(t.moves())}`);
     t.dom.window.close();
   }
