@@ -101,10 +101,11 @@ function makeDom() {
       await sleep(300);
       if (c.handicapAi) { t.setCheck('optHandicapAi', true); await sleep(300); }
       t.setCheck('optNerf', !!c.nerf);
-      await sleep(1800);
+      // handicap-to-AI means the AI plays two stones in a row, so allow more time
+      await sleep(c.handicapAi ? 3200 : 1800);
       const before = t.moves().length;
       t.click(9, 7);
-      await sleep(2600);
+      await sleep(c.handicapAi ? 3600 : 2600);
       const after = t.moves().length;
       ok(`${c.name}: AI responded`, after > before, `-> ${JSON.stringify(t.moves())}`);
       t.dom.window.close();
