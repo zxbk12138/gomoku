@@ -223,7 +223,14 @@
 
     <div class="rules">
       <label class="toggle"><input type="checkbox" id="optTwoPlayer"> <b>双人对战</b>（关掉 AI，两个人轮流下）</label>
-      <label class="toggle"><input type="checkbox" id="optDrawMode"> <b>平局模式</b>（AI 专门阻止任何人成五，包括它自己）</label>
+      <div class="lvl" style="margin-bottom:8px">
+        <span>平局模式</span>
+        <select id="optDrawMode">
+          <option value="off" selected>关闭</option>
+          <option value="draw">平局（稳健防守）</option>
+          <option value="spoiler">搅局（不断做四逼对手应手）</option>
+        </select>
+      </div>
       <label class="toggle"><input type="checkbox" id="optRenju"> <b>禁手规则</b>（黑棋三三 / 四四 / 长连判负）</label>
       <label class="toggle"><input type="checkbox" id="optHandicap"> <b>让子模式</b>（白棋开局连下两子）</label>
       <label class="toggle"><input type="checkbox" id="optHandicapAi"> <span class="indent">让子给 AI（你执黑时）</span></label>
@@ -292,7 +299,7 @@
 (function(){
   const { Engine, coordName, parseCoord, setSize, getSize } = window.GomokuEngine;
   const { analyseBlackMove, configureForbidden } = window.Renju;
-  const { chooseDrawMove, configureDrawSeeker } = window.DrawSeeker;
+  const { chooseDrawMove, chooseSpoilerMove, configureDrawSeeker } = window.DrawSeeker;
 
   // Board geometry is rebuilt whenever the board size changes.
   let N = 15;              // board size (15 / 13 / 11 / 9)
@@ -364,7 +371,7 @@
   let handicap = false;    // the non-first colour may place two stones at the start
   let handicapAi = false;  // give the handicap to the AI instead of the human
   let nerf = false;        // weaken the AI when it moves first
-  let drawMode = false;    // spoiler AI: prevent anyone (including itself) from winning
+  let drawMode = 'off';    // 'off' | 'draw' | 'spoiler'
   let boardSize = 15;      // 15 / 13 / 11 / 9
   let handicapLeft = 0;    // extra stones the handicap side may still place
   let handicapPending = false;  // the handicap side just moved and may move again
@@ -631,7 +638,7 @@
       moves = st.moves; status = st.status || 'playing'; winCells = st.winCells || null;
       if (st.humanSide) humanSide = st.humanSide;
       if (st.firstSide) firstSide = st.firstSide;
-      twoPlayer = !!st.twoPlayer; renju = !!st.renju; drawMode = !!st.drawMode; boardSize = st.boardSize || 15;
+      twoPlayer = !!st.twoPlayer; renju = !!st.renju; drawMode = st.drawMode || 'off'; boardSize = st.boardSize || 15;
       handicap = !!st.handicap; handicapAi = !!st.handicapAi; nerf = !!st.nerf;
       handicapLeft = st.handicapLeft || 0;
       explicitTurn = st.explicitTurn || null;
@@ -705,8 +712,15 @@
     const numeric = side === 'B' ? 1 : 2;
 
     // ---- draw / spoiler mode: never win, keep both sides away from five ----
-    if (drawMode){
-      const r = chooseDrawMove(e, numeric, { depth: 3, width: 14 });
+    if (drawMode === 'spoiler'){
+      const r = chooseSpoilerMove(e, numeric, { chaos: 1 });
+      return {
+        move: r.move, score: 0, depth: 0, nodes: 0, time: 0,
+        pv: [r.move], note: r.note,
+      };
+    }
+    if (drawMode === 'draw'){
+      const r = chooseDrawMove(e, numeric, { budget: 400 });
       return {
         move: r.move, score: 0, depth: 3, nodes: 0, time: 0,
         pv: [r.move], note: r.note,
@@ -1113,12 +1127,14 @@
   });
 
   optDrawMode.addEventListener('change', () => {
-    drawMode = optDrawMode.checked;
-    if (drawMode && twoPlayer){
+    drawMode = optDrawMode.value || 'off';
+    if (drawMode !== 'off' && twoPlayer){
       twoPlayer = false;
       optTwoPlayer.checked = false;
     }
-    toast(drawMode ? '平局模式：AI 会阻止任何人成五' : '已关闭平局模式');
+    toast(drawMode === 'spoiler' ? '搅局模式：AI 会不断做四逼你应手'
+        : drawMode === 'draw' ? '平局模式：AI 会阻止任何人成五'
+        : '已关闭平局模式');
     restart();
     syncControls();
   });
@@ -1127,7 +1143,7 @@
     sideSel.value = humanSide;
     firstColorSel.value = firstSide;
     optTwoPlayer.checked = twoPlayer;
-    optDrawMode.checked = drawMode;
+    optDrawMode.value = drawMode;
     boardSizeSel.value = String(boardSize);
     optRenju.checked = renju;
     optHandicap.checked = handicap;
@@ -1135,8 +1151,8 @@
     optHandicapAi.disabled = !handicap || twoPlayer;
     optNerf.checked = nerf;
     sideSel.disabled = twoPlayer;
-    levelSel.disabled = twoPlayer || drawMode;
-    optNerf.disabled = twoPlayer || drawMode;
+    levelSel.disabled = twoPlayer || drawMode !== 'off';
+    optNerf.disabled = twoPlayer || drawMode !== 'off';
   }
 
   sideSel.addEventListener('change', () => {
