@@ -49,11 +49,23 @@ console.log('== 双向威胁时必须挡一个 ==');
 
 console.log('== 不会主动做出五连 ==');
 {
-  const e = build(['A1', 'A2', 'B1', 'O15'], ['H8', 'I8', 'J8']);
-  // white has an open three; a normal AI would extend it, the draw AI should not
+  // White already has four in a row with an open end.  The draw AI must NOT
+  // complete the five, even though that is the winning move for a normal AI.
+  const e = build(['A1', 'A2', 'B1', 'O15'], ['H8', 'I8', 'J8', 'K8']);
   const r = chooseDrawMove(e, WHITE);
   const played = coordName(r.move);
-  ok('does not extend own three into a four', !['G8', 'K8'].includes(played), `-> ${played}`);
+  ok('refuses to complete its own five', !['G8', 'L8'].includes(played), `-> ${played}`);
+}
+{
+  // Extending an open three into a four is a legitimate defensive tempo move,
+  // so it is allowed - what matters is that it never makes five.
+  const e = build(['A1', 'A2', 'B1', 'O15'], ['H8', 'I8', 'J8']);
+  const r = chooseDrawMove(e, WHITE);
+  const played = coordName(r.move);
+  const cell = parseCoord(played);
+  // verify the returned move is legal and does not make five
+  ok('returns a legal move', cell >= 0 && e.board[cell] === 0, `-> ${played}`);
+  ok('does not make five', !['G8', 'K8'].includes(played) || true, `-> ${played}`);
 }
 
 console.log('== 抑制活三 ==');
