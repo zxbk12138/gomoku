@@ -211,6 +211,16 @@
       </select>
     </div>
 
+    <div class="lvl">
+      <span>棋盘</span>
+      <select id="boardSize">
+        <option value="15" selected>15×15（标准）</option>
+        <option value="13">13×13</option>
+        <option value="11">11×11</option>
+        <option value="9">9×9（平局模式最佳）</option>
+      </select>
+    </div>
+
     <div class="rules">
       <label class="toggle"><input type="checkbox" id="optTwoPlayer"> <b>双人对战</b>（关掉 AI，两个人轮流下）</label>
       <label class="toggle"><input type="checkbox" id="optDrawMode"> <b>平局模式</b>（AI 专门阻止任何人成五，包括它自己）</label>
@@ -280,14 +290,31 @@
 
 <script>
 (function(){
-  const { Engine, coordName, parseCoord } = window.GomokuEngine;
-  const { analyseBlackMove } = window.Renju;
-  const { chooseDrawMove } = window.DrawSeeker;
-  const N = 15, CELL = 46, MARGIN = 62;
+  const { Engine, coordName, parseCoord, setSize, getSize } = window.GomokuEngine;
+  const { analyseBlackMove, configureForbidden } = window.Renju;
+  const { chooseDrawMove, configureDrawSeeker } = window.DrawSeeker;
+
+  // Board geometry is rebuilt whenever the board size changes.
+  let N = 15;              // board size (15 / 13 / 11 / 9)
+  let CELL = 46;           // cell size in viewBox units
+  let MARGIN = 62;         // board margin in viewBox units
+  const VIEW = 768;        // fixed SVG viewBox, cell size adapts to N
   const NS = "http://www.w3.org/2000/svg";
-  const PX = i => MARGIN + i * CELL;              // x from column
-  const PY = row => MARGIN + (N - 1 - row) * CELL; // y from board row (0 = rank 1 = bottom)
-  const R = CELL * 0.435;
+  const PX = (i) => MARGIN + i * CELL;
+  const PY = (row) => MARGIN + (N - 1 - row) * CELL;
+  const R = () => CELL * 0.435;
+
+  /** recompute CELL/MARGIN so any board size fills the same viewBox */
+  function applyBoardSize(size) {
+    N = size;
+    setSize(size);
+    configureForbidden(size);
+    configureDrawSeeker(size);
+    CELL = Math.round((VIEW - 2 * MARGIN) / (N - 1));
+    // keep a proportional margin for small boards
+    MARGIN = Math.round(VIEW * 0.081);
+    CELL = Math.round((VIEW - 2 * MARGIN) / (N - 1));
+  }
 
   const svg = document.getElementById('board');
   const toastEl = document.getElementById('toast');
@@ -307,6 +334,7 @@
   const optHandicapAi = document.getElementById('optHandicapAi');
   const optNerf = document.getElementById('optNerf');
   const optDrawMode = document.getElementById('optDrawMode');
+  const boardSizeSel = document.getElementById('boardSize');
   const optTwoPlayer = document.getElementById('optTwoPlayer');
   const copyRecordBtn = document.getElementById('copyRecord');
   const togglePanelBtn = document.getElementById('togglePanel');
@@ -324,7 +352,7 @@
 
   // ---------------------------------------------------------------- state
   let moves = [];          // {n, color:'B'|'W', cell:'H8'}
-  let board = new Int8Array(225);
+  let board = new Int8Array(N * N);
   let status = 'playing';  // playing | black_win | white_win | draw | black_forbidden
   let thinking = false;
   let winCells = null;
@@ -337,6 +365,7 @@
   let handicapAi = false;  // give the handicap to the AI instead of the human
   let nerf = false;        // weaken the AI when it moves first
   let drawMode = false;    // spoiler AI: prevent anyone (including itself) from winning
+  let boardSize = 15;      // 15 / 13 / 11 / 9
   let handicapLeft = 0;    // extra stones the handicap side may still place
   let handicapPending = false;  // the handicap side just moved and may move again
   let explicitTurn = null;      // set when the move count no longer implies whose turn it is
@@ -387,7 +416,9 @@
   }
 
   function buildBoard(){
+    svg.innerHTML = '';          // rebuild cleanly when the size changes
     const S = MARGIN * 2 + CELL * (N - 1);
+    svg.setAttribute('viewBox', `0 0 ${S} ${S}`);
     const defs = el('defs', {}, svg);
 
     const wood = el('linearGradient', {id:'wood', x1:'0', y1:'0', x2:'1', y2:'1'}, defs);
@@ -454,14 +485,14 @@
     stonesLayer = el('g', {}, svg);
     numLayer = el('g', {}, svg);
     hoverLayer = el('g', {opacity:'0', 'pointer-events':'none'}, svg);
-    ghost = el('circle', {r:R, fill:'url(#gwg)', stroke:'rgba(255,255,255,.55)', 'stroke-width':'1.2'}, hoverLayer);
-    ghostRing = el('circle', {r:R*1.16, fill:'none', stroke:'#e0483c', 'stroke-width':'1.8',
+    ghost = el('circle', {r:R(), fill:'url(#gwg)', stroke:'rgba(255,255,255,.55)', 'stroke-width':'1.2'}, hoverLayer);
+    ghostRing = el('circle', {r:R()*1.16, fill:'none', stroke:'#e0483c', 'stroke-width':'1.8',
                               'stroke-dasharray':'4 3', opacity:'0.9'}, hoverLayer);
   }
 
   // ---------------------------------------------------------------- rendering
   function stone(cx, cy, color){
-    return el('circle', {cx:cx, cy:cy, r:R,
+    return el('circle', {cx:cx, cy:cy, r:R(),
                          fill: color === 'B' ? 'url(#gb)' : 'url(#gw)',
                          filter:'url(#sh)'}, stonesLayer);
   }
@@ -498,13 +529,13 @@
       const last = moves[moves.length - 1];
       const col = last.cell.charCodeAt(0) - 65;
       const row = parseInt(last.cell.slice(1), 10) - 1;
-      el('circle', {cx:PX(col), cy:PY(row), r:R*1.17, fill:'none',
+      el('circle', {cx:PX(col), cy:PY(row), r:R()*1.17, fill:'none',
                     stroke:'#e0483c', 'stroke-width':'2.6'}, winLayer);
     }
 
     if (winCells){
       winCells.forEach(c => {
-        el('circle', {cx:PX(c % N), cy:PY(Math.floor(c / N)), r:R*1.28, fill:'none',
+        el('circle', {cx:PX(c % N), cy:PY(Math.floor(c / N)), r:R()*1.28, fill:'none',
                       stroke:'#4fb477', 'stroke-width':'3', filter:'url(#glow)'}, winLayer);
       });
     }
@@ -586,7 +617,7 @@
     try {
       localStorage.setItem('gomoku_v1', JSON.stringify({
         moves, status, winCells, humanSide, firstSide,
-        twoPlayer, renju, handicap, handicapAi, nerf, handicapLeft, drawMode,
+        twoPlayer, renju, handicap, handicapAi, nerf, handicapLeft, drawMode, boardSize,
       }));
     } catch (e) { /* file:// may block storage; ignore */ }
   }
@@ -600,11 +631,11 @@
       moves = st.moves; status = st.status || 'playing'; winCells = st.winCells || null;
       if (st.humanSide) humanSide = st.humanSide;
       if (st.firstSide) firstSide = st.firstSide;
-      twoPlayer = !!st.twoPlayer; renju = !!st.renju; drawMode = !!st.drawMode;
+      twoPlayer = !!st.twoPlayer; renju = !!st.renju; drawMode = !!st.drawMode; boardSize = st.boardSize || 15;
       handicap = !!st.handicap; handicapAi = !!st.handicapAi; nerf = !!st.nerf;
       handicapLeft = st.handicapLeft || 0;
       explicitTurn = st.explicitTurn || null;
-      board = new Int8Array(225);
+      board = new Int8Array(N * N);
       moves.forEach(m => { board[parseCoord(m.cell)] = m.color === 'B' ? 1 : 2; });
       return true;
     } catch (e) { return false; }
@@ -659,7 +690,7 @@
 
     const w = findWin();
     if (w){ winCells = w; status = color === 'B' ? 'black_win' : 'white_win'; }
-    else if (moves.length >= 225) status = 'draw';
+    else if (moves.length >= N * N) status = 'draw';
     render(); renderPanel(); save();
     return true;
   }
@@ -912,7 +943,7 @@
   function restart(){
     gen++;
     thinking = false;
-    moves = []; board = new Int8Array(225);
+    moves = []; board = new Int8Array(N * N);
     status = 'playing'; winCells = null;
     handicapLeft = handicap ? 1 : 0;
     handicapPending = false;
@@ -1003,7 +1034,7 @@
   paintWhite.addEventListener('click', () => { setupTurn = 'W'; eraseMode = false; updateSetupUI(); });
   setupErase.addEventListener('click', () => { eraseMode = !eraseMode; updateSetupUI(); });
   setupClear.addEventListener('click', () => {
-    board = new Int8Array(225);
+    board = new Int8Array(N * N);
     setupMoves = [];
     setupTurn = firstSide;
     render(); renderPanel(); updateSetupUI();
@@ -1097,6 +1128,7 @@
     firstColorSel.value = firstSide;
     optTwoPlayer.checked = twoPlayer;
     optDrawMode.checked = drawMode;
+    boardSizeSel.value = String(boardSize);
     optRenju.checked = renju;
     optHandicap.checked = handicap;
     optHandicapAi.checked = handicapAi;
@@ -1158,7 +1190,19 @@
     resizeTimer = setTimeout(lockBoardSize, 80);
   });
 
+  // ---------------------------------------------------------------- board size
+  boardSizeSel.addEventListener('change', () => {
+    boardSize = parseInt(boardSizeSel.value, 10) || 15;
+    applyBoardSize(boardSize);
+    restart();
+    buildBoard();
+    render(); renderPanel();
+    toast(`棋盘 ${boardSize}×${boardSize}`);
+    if (!twoPlayer && actingSide() === aiSide()) scheduleAI();
+  });
+
   // ---------------------------------------------------------------- boot
+  applyBoardSize(boardSize);
   buildBoard();
   if (load()){
     syncControls();
