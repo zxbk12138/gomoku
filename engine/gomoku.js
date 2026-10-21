@@ -6,14 +6,16 @@
  * Index = y * 15 + x, y = 0 is the BOTTOM row (rank 1), x = 0 is column A.
  */
 
-const N = 15;
-const SIZE = N * N;
+// Board size is configurable so the same engine can run 15x15 or a smaller
+// board (9x9 / 11x11) where a defensive "draw" style is far more effective.
+let N = 15;
+let SIZE = N * N;
 const EMPTY = 0, BLACK = 1, WHITE = 2;
 const WIN = 1e9;
 const INF = 1e10;
 const TIMEOUT = Symbol('timeout');
 
-const { analyseBlackMove } = require('./forbidden');
+const { analyseBlackMove, configureForbidden } = require('./forbidden');
 
 // 5-cell window score used ONLY for move ordering / deltas
 const W5 = [0, 1, 14, 180, 5000, 200000];
@@ -31,12 +33,12 @@ const RUN = [
 const DIRS = [[1, 0], [0, 1], [1, 1], [1, -1]];
 
 // ---------------------------------------------------------------- tables
-const windows = [];
-const cellWindows = [];
-for (let i = 0; i < SIZE; i++) cellWindows.push([]);
-// per cell, the 4 neighbours in each direction (or -1)
-const prevCell = new Int16Array(SIZE * 4);
-const nextCell = new Int16Array(SIZE * 4);
+// Rebuilt by setSize() so a different board size can be used at runtime.
+let windows = [];
+let cellWindows = [];
+let prevCell = new Int16Array(SIZE * 4);
+let nextCell = new Int16Array(SIZE * 4);
+let ZOB = new Int32Array(SIZE * 2);
 
 function addWindow(a, b, c, d, e) {
   const id = windows.length;
@@ -47,25 +49,7 @@ function addWindow(a, b, c, d, e) {
   cellWindows[d].push(id);
   cellWindows[e].push(id);
 }
-for (let y = 0; y < N; y++) for (let x = 0; x + 4 < N; x++) addWindow(y * N + x, y * N + x + 1, y * N + x + 2, y * N + x + 3, y * N + x + 4);
-for (let x = 0; x < N; x++) for (let y = 0; y + 4 < N; y++) addWindow(y * N + x, (y + 1) * N + x, (y + 2) * N + x, (y + 3) * N + x, (y + 4) * N + x);
-for (let y = 0; y + 4 < N; y++) for (let x = 0; x + 4 < N; x++) addWindow(y * N + x, (y + 1) * N + x + 1, (y + 2) * N + x + 2, (y + 3) * N + x + 3, (y + 4) * N + x + 4);
-for (let y = 0; y + 4 < N; y++) for (let x = 4; x < N; x++) addWindow(y * N + x, (y + 1) * N + x - 1, (y + 2) * N + x - 2, (y + 3) * N + x - 3, (y + 4) * N + x - 4);
 
-for (let y = 0; y < N; y++) {
-  for (let x = 0; x < N; x++) {
-    const c = y * N + x;
-    for (let d = 0; d < 4; d++) {
-      const dx = DIRS[d][0], dy = DIRS[d][1];
-      const px = x - dx, py = y - dy;
-      const nx = x + dx, ny = y + dy;
-      prevCell[c * 4 + d] = (px >= 0 && px < N && py >= 0 && py < N) ? py * N + px : -1;
-      nextCell[c * 4 + d] = (nx >= 0 && nx < N && ny >= 0 && ny < N) ? ny * N + nx : -1;
-    }
-  }
-}
-
-// zobrist
 let seed = 0x9e3779b9;
 function rnd32() {
   seed ^= seed << 13; seed >>>= 0;
@@ -73,8 +57,51 @@ function rnd32() {
   seed ^= seed << 5; seed >>>= 0;
   return seed | 0;
 }
-const ZOB = new Int32Array(SIZE * 2);
-for (let i = 0; i < ZOB.length; i++) ZOB[i] = rnd32() || 1;
+
+/** (re)build every size-dependent table */
+function buildTables(size) {
+  N = size;
+  SIZE = N * N;
+
+  windows = [];
+  cellWindows = [];
+  for (let i = 0; i < SIZE; i++) cellWindows.push([]);
+
+  for (let y = 0; y < N; y++) for (let x = 0; x + 4 < N; x++) addWindow(y * N + x, y * N + x + 1, y * N + x + 2, y * N + x + 3, y * N + x + 4);
+  for (let x = 0; x < N; x++) for (let y = 0; y + 4 < N; y++) addWindow(y * N + x, (y + 1) * N + x, (y + 2) * N + x, (y + 3) * N + x, (y + 4) * N + x);
+  for (let y = 0; y + 4 < N; y++) for (let x = 0; x + 4 < N; x++) addWindow(y * N + x, (y + 1) * N + x + 1, (y + 2) * N + x + 2, (y + 3) * N + x + 3, (y + 4) * N + x + 4);
+  for (let y = 0; y + 4 < N; y++) for (let x = 4; x < N; x++) addWindow(y * N + x, (y + 1) * N + x - 1, (y + 2) * N + x - 2, (y + 3) * N + x - 3, (y + 4) * N + x - 4);
+
+  prevCell = new Int16Array(SIZE * 4);
+  nextCell = new Int16Array(SIZE * 4);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const c = y * N + x;
+      for (let d = 0; d < 4; d++) {
+        const dx = DIRS[d][0], dy = DIRS[d][1];
+        const px = x - dx, py = y - dy;
+        const nx = x + dx, ny = y + dy;
+        prevCell[c * 4 + d] = (px >= 0 && px < N && py >= 0 && py < N) ? py * N + px : -1;
+        nextCell[c * 4 + d] = (nx >= 0 && nx < N && ny >= 0 && ny < N) ? ny * N + nx : -1;
+      }
+    }
+  }
+
+  seed = 0x9e3779b9;
+  ZOB = new Int32Array(SIZE * 2);
+  for (let i = 0; i < ZOB.length; i++) ZOB[i] = rnd32() || 1;
+
+  // the renju module keeps its own tables
+  if (typeof configureForbidden === 'function') configureForbidden(N);
+}
+
+buildTables(15);
+
+/** public: switch board size (9, 11, 13 or 15) */
+function setSize(size) {
+  buildTables(size);
+}
+function getSize() { return N; }
 
 // ---------------------------------------------------------------- helpers
 function coordName(c) {
@@ -82,6 +109,7 @@ function coordName(c) {
 }
 function parseCoord(s) {
   s = String(s).trim().toUpperCase();
+  // allow up to column O (15) - smaller boards simply reject out-of-range cells
   let m = /^([A-O])\s*[-,]?\s*(\d{1,2})$/.exec(s);
   if (m) {
     const x = m[1].charCodeAt(0) - 65;
@@ -462,12 +490,13 @@ class Engine {
     this.generation++;
 
     if (this.count === 0) {
-      const mv = 7 * N + 7;
-      return { move: mv, score: 0, depth: 0, nodes: 0, time: 0, pv: [mv], note: 'opening: centre' };
+      const mid = (N >> 1) * N + (N >> 1);
+      return { move: mid, score: 0, depth: 0, nodes: 0, time: 0, pv: [mid], note: 'opening: centre' };
     }
 
     const opp = 3 - side;
-    const cands = this.candidates();
+    const banned = opts.banned || null;
+    const cands = this.candidates().filter((c) => !banned || !banned[c]);
     const winArr = side === 1 ? this.win1 : this.win2;
     for (let i = 0; i < cands.length; i++) {
       if (winArr[cands[i]] > 0) {
@@ -485,8 +514,9 @@ class Engine {
       return { move: blocks[0], score: 0, depth: 1, nodes: 0, time: Date.now() - t0, pv: [blocks[0]], note: 'block five' };
     }
 
-    // VCF forced win
-    if (!opts.noVcf) {
+    // VCF forced win (skip when a cell is banned - the caller is deliberately
+    // avoiding a winning line)
+    if (!opts.noVcf && !banned) {
       const vseq = this.vcf(side, opts.vcfDepth || 12);
       if (vseq) {
         return { move: vseq[0], score: WIN, depth: 0, nodes: 0, time: Date.now() - t0, pv: vseq, note: 'VCF win' };
@@ -496,6 +526,12 @@ class Engine {
     let bestMove = cands[0], bestScore = 0, bestDepth = 0, bestPv = [bestMove];
     let rootMoves = this.genMoves(side, opts.rootLimit || 20, 0).map((m) => m.c);
     const rootScores = new Map();   // final depth scores, for tie-breaking
+
+    // caller-supplied exclusions (used by the draw-seeker to avoid winning moves)
+    if (banned) {
+      const allowed = rootMoves.filter((c) => !banned[c]);
+      if (allowed.length > 0) rootMoves = allowed;
+    }
 
     // Renju: black may not play forbidden points, so drop them from the root list
     if (opts.renju && side === 1) {
@@ -577,4 +613,10 @@ class Engine {
   }
 }
 
-module.exports = { Engine, N, SIZE, BLACK, WHITE, EMPTY, coordName, parseCoord, WIN };
+module.exports = {
+  Engine, BLACK, WHITE, EMPTY, coordName, parseCoord, WIN,
+  setSize, getSize,
+  // live getters: the board size can change, so these must not be snapshotted
+  get N() { return N; },
+  get SIZE() { return SIZE; },
+};
